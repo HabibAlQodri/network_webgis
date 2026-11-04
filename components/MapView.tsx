@@ -115,7 +115,9 @@ export default function MapView({ cells, mask, sourceIdx, filter, region, marker
   const srcIdx = useMemo(() => sourceIdx ?? Uint32Array.from({ length: cells.radio.length }, (_, i) => i), [sourceIdx, cells]);
 
   const latest = useRef({ cells, mask, srcIdx, filter, region, grids, towers, onViewport });
-  latest.current = { cells, mask, srcIdx, filter, region, grids, towers, onViewport };
+  useEffect(() => {
+    latest.current = { cells, mask, srcIdx, filter, region, grids, towers, onViewport };
+  });
 
   const report = () => {
     const map = mapRef.current; if (!map) return;
@@ -267,46 +269,57 @@ export default function MapView({ cells, mask, sourceIdx, filter, region, marker
 
       map.on("click", (e) => {
         const f = pick(e.point); if (!f) { popupRef.current?.remove(); return; }
-        const p = f.properties as Record<string, any>;
+        const p = (f.properties ?? {}) as Record<string, unknown>;
         switch (f.layer.id) {
           case "cells-points": {
-            const op = OPERATORS[p.mnc]?.name ?? `MNC ${p.mnc}`;
-            open(e.lngLat, popupNode(`${op} · ${RADIOS[p.radio]}`, [
-              ["TAC", String(p.area)], ["Cell ID", String(p.cell)], ["Range", `${p.range} m`],
-              ["Samples", String(p.samples)], ["Update", new Date(p.updated * 1000).toLocaleDateString("id-ID")],
-            ], { text: op, color: OPERATORS[p.mnc]?.color ?? OTHER_COLOR }));
+            const mnc = Number(p.mnc ?? 0);
+            const radio = Number(p.radio ?? 0);
+            const updated = Number(p.updated ?? 0);
+            const op = OPERATORS[mnc]?.name ?? `MNC ${mnc}`;
+            open(e.lngLat, popupNode(`${op} · ${RADIOS[radio] ?? "Sel"}`, [
+              ["TAC", String(p.area ?? "-")], ["Cell ID", String(p.cell ?? "-")], ["Range", `${p.range ?? 0} m`],
+              ["Samples", String(p.samples ?? "-")], ["Update", updated ? new Date(updated * 1000).toLocaleDateString("id-ID") : "-"],
+            ], { text: op, color: OPERATORS[mnc]?.color ?? OTHER_COLOR }));
             break;
           }
-          case "towers":
-            open(e.lngLat, popupNode(p.name || "Menara (OSM)", [
-              ["Operator", p.operator || "-"], ["Tipe", p.kind || "-"],
-              ["Tinggi", p.height ? `${p.height} m` : "-"], ["OSM", String(p.id)],
+          case "towers": {
+            const name = typeof p.name === "string" && p.name ? p.name : "Menara (OSM)";
+            open(e.lngLat, popupNode(name, [
+              ["Operator", String(p.operator || "-")], ["Tipe", String(p.kind || "-")],
+              ["Tinggi", p.height ? `${p.height} m` : "-"], ["OSM", String(p.id ?? "-")],
             ], { text: "", color: "#fbbf24" }));
             break;
-          case "cables-tg-hit":
-            open(e.lngLat, popupNode(p.name, [
+          }
+          case "cables-tg-hit": {
+            const name = String(p.name || "Kabel Laut");
+            open(e.lngLat, popupNode(name, [
               ["Status", p.is_planned ? "Rencana" : "Aktif / Operasional"],
               ["RFS Year", p.rfs_year ? String(p.rfs_year) : "-"],
               ["Landing Stn", p.landing_count ? `${p.landing_count} lokasi` : "-"],
               ["Sumber", "TeleGeography"],
               ["ID", String(p.id ?? "-")],
-            ], { text: "", color: p.color || "#38bdf8" }));
+            ], { text: "", color: typeof p.color === "string" ? p.color : "#38bdf8" }));
             break;
-          case "landing-points":
-            open(e.lngLat, popupNode(p.name, [
+          }
+          case "landing-points": {
+            const name = String(p.name || "Landing Station");
+            open(e.lngLat, popupNode(name, [
               ["Kategori", "Landing Station Kabel Laut"],
               ["Negara", "Indonesia"],
               ["Sumber", "TeleGeography"],
             ], { text: "", color: "#0891b2" }));
             break;
-          case "itu-fiber-hit":
-            open(e.lngLat, popupNode(p.name || "Backbone Jaringan", [
-              ["Medium", p.medium || "Fiber Optic"],
-              ["Status", p.status || "Operational"],
+          }
+          case "itu-fiber-hit": {
+            const name = String(p.name || "Backbone Jaringan");
+            open(e.lngLat, popupNode(name, [
+              ["Medium", String(p.medium || "Fiber Optic")],
+              ["Status", String(p.status || "Operational")],
               ["Sumber", "ITU - Broadband Map"],
               ["UID", String(p.uid ?? "-")],
-            ], { text: "", color: p.color || "#10b981" }));
+            ], { text: "", color: typeof p.color === "string" ? p.color : "#10b981" }));
             break;
+          }
         }
       });
 
@@ -337,7 +350,7 @@ export default function MapView({ cells, mask, sourceIdx, filter, region, marker
   }, [ready, filter]);
 
   // Hitungan dalam tampilan mengikuti filter & wilayah
-  useEffect(() => { if (ready) report(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [ready, mask, grids]);
+  useEffect(() => { if (ready) report(); }, [ready, mask, grids]);
 
   // Batas wilayah
   useEffect(() => {

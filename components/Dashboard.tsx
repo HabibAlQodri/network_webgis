@@ -17,7 +17,6 @@ const MapView = dynamic(() => import("./MapView"), {
 const fmt = (n: number) => n.toLocaleString("id-ID");
 const KNOWN_OPS = Object.keys(OPERATORS).map(Number);
 const KNOWN_SET: ReadonlySet<number> = new Set(KNOWN_OPS);
-const ALL_RADIOS = [0, 1, 2, 3];
 const opName = (mnc: number) => (mnc === OTHER_OPERATOR ? "Lainnya" : OPERATORS[mnc]?.name ?? `MNC ${mnc}`);
 
 function useDebounced<T>(value: T, ms: number): T {
@@ -263,14 +262,20 @@ function PlaceList({ state, onPick }: { state: GeocodeState; onPick: (p: PlaceRe
 
 const TECH_ORDER = [3, 2, 1, 0]; // NR, LTE, UMTS, GSM (terbaru dulu)
 
+function StatItem({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex items-baseline gap-1">
+      <dt className="text-slate-500">{k}</dt>
+      <dd className="tabular-nums text-slate-900">{v}</dd>
+    </div>
+  );
+}
+
 function CompareCard({ stat, total, color, best }: { stat: OperatorStat; total: number; color: string; best: { count: number; coverage: number } }) {
   const share = total ? (stat.count / total) * 100 : 0;
   const mix = TECH_ORDER.filter((r) => stat.byRadio[r] > 0);
   const m = (v: number) => `${fmt(Math.round(v))} m`;
   const pct = (n: number) => (n / stat.count) * 100;
-  const Stat = ({ k, v }: { k: string; v: string }) => (
-    <div className="flex items-baseline gap-1"><dt className="text-slate-500">{k}</dt><dd className="tabular-nums text-slate-900">{v}</dd></div>
-  );
   return (
     <li className="rounded-lg border border-slate-900/10 bg-white px-2.5 py-2">
       <div className="flex items-center gap-2 text-[13px]">
@@ -290,9 +295,9 @@ function CompareCard({ stat, total, color, best }: { stat: OperatorStat; total: 
         {mix.map((r) => <span key={r} className="flex items-center gap-1"><Dot c={RADIO_COLORS[r]} />{RADIOS[r]} {fmt(stat.byRadio[r])}</span>)}
       </div>
       <dl className="mt-1.5 flex flex-wrap justify-between gap-x-3 gap-y-0.5 border-t border-slate-900/5 pt-1.5 text-[11px]">
-        <Stat k="Rata-rata" v={m(stat.avgRange)} />
-        <Stat k="Median" v={m(stat.medianRange)} />
-        <Stat k="Est. cakupan" v={`${fmt(Math.round(stat.coverageKm2))} km²`} />
+        <StatItem k="Rata-rata" v={m(stat.avgRange)} />
+        <StatItem k="Median" v={m(stat.medianRange)} />
+        <StatItem k="Est. cakupan" v={`${fmt(Math.round(stat.coverageKm2))} km²`} />
       </dl>
     </li>
   );
@@ -308,7 +313,7 @@ export default function Dashboard() {
   const [ops, setOps] = useState<Set<number>>(new Set());
   const [radios, setRadios] = useState<Set<number>>(new Set([0, 1, 2, 3]));
   const [minSamples, setMinSamples] = useState(1);
-  const [show, setShow] = useState({ cells: true, towers: true, cables: true, landingPoints: true, ituFiber: true });
+  const [show, setShow] = useState({ cells: false, towers: false, cables: true, landingPoints: true, ituFiber: true });
   const [mode, setMode] = useState<"points" | "heat">("points");
   const [basemap, setBasemap] = useState<Basemap>("voyager");
   const [view, setView] = useState<Preset & { n: number; bounds?: BBox }>({ ...PRESETS[0], n: 0 });
@@ -328,8 +333,16 @@ export default function Dashboard() {
   const [legendOpen, setLegendOpen] = useState(false);
   // Legenda bisa digeser: offset (px) dari posisi bawaan, dibatasi agar tetap di dalam peta
   const legendRef = useRef<HTMLDivElement>(null);
-  const [legendPos, setLegendPos] = useState({ x: 0, y: 0 });
+  const [legendPos, setLegendPos] = useState<{ x: number; y: number }>(() => {
+    if (typeof window === "undefined") return { x: 0, y: 0 };
+    try {
+      const v = JSON.parse(localStorage.getItem("legend-pos") ?? "null");
+      if (v && Number.isFinite(v.x) && Number.isFinite(v.y)) return v;
+    } catch { /* abaikan */ }
+    return { x: 0, y: 0 };
+  });
   const legendDrag = useRef<{ sx: number; sy: number; ox: number; oy: number; min: [number, number]; max: [number, number] } | null>(null);
+  const [cablesIndex, setCablesIndex] = useState<{ id: string; name: string; center: [number, number]; rfs_year?: number | null; is_planned?: boolean }[]>([]);
   const [q, setQ] = useState("");
   const [searchFocus, setSearchFocus] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -354,14 +367,38 @@ export default function Dashboard() {
   };
   const saveLegend = (p: { x: number; y: number }) => { try { localStorage.setItem("legend-pos", JSON.stringify(p)); } catch { /* abaikan */ } };
   useEffect(() => {
-    try {
-      const v = JSON.parse(localStorage.getItem("legend-pos") ?? "null");
-      if (v && Number.isFinite(v.x) && Number.isFinite(v.y)) setLegendPos(v);
-    } catch { /* abaikan */ }
     const onResize = () => setLegendPos((p) => clampLegend(p));
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Indeks sistem kabel laut untuk pencarian
+  useEffect(() => {
+    fetch("/data/cables_telegeography.geojson")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((gj) => {
+        if (!gj || !Array.isArray(gj.features)) return;
+        const byId = new Map<string, { id: string; name: string; center: [number, number]; rfs_year?: number | null; is_planned?: boolean }>();
+        for (const f of gj.features) {
+          const p = f.properties;
+          if (!p?.id || byId.has(p.id)) continue;
+          const coords = f.geometry?.coordinates;
+          if (!Array.isArray(coords) || coords.length === 0) continue;
+          const mid = coords[Math.floor(coords.length / 2)];
+          if (Array.isArray(mid) && mid.length >= 2) {
+            byId.set(p.id, {
+              id: p.id,
+              name: p.name || p.id,
+              center: [mid[0], mid[1]],
+              rfs_year: p.rfs_year,
+              is_planned: p.is_planned,
+            });
+          }
+        }
+        setCablesIndex(Array.from(byId.values()));
+      })
+      .catch(() => { /* abaikan jika gagal/offline */ });
   }, []);
   const dragProps = {
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
@@ -400,12 +437,16 @@ export default function Dashboard() {
     return () => window.removeEventListener("keydown", onKey);
   }, [lastTab]);
 
+  const retryLoad = () => {
+    setError(null);
+    setLoaded([]);
+    setAttempt((a) => a + 1);
+  };
+
   useEffect(() => {
     // AbortController menghentikan permintaan jaringan saat komponen dilepas atau pemuatan diulang
     const ctrl = new AbortController();
     const { signal } = ctrl;
-    setError(null);
-    setLoaded([]);
     loadDataset({ signal, onStep: (step) => { if (!signal.aborted) setLoaded((l) => [...l, step]); } })
       .then((d) => { if (!signal.aborted) { setData(d); setOps(new Set(Object.keys(OPERATORS).map(Number))); } })
       .catch((e) => {
@@ -469,12 +510,21 @@ export default function Dashboard() {
     return { stats: compareOperators(c, sel, KNOWN_SET), total: sel.length };
   }, [data, tab, regionIdx, compareScope, boundsDeb, radios, minSamples]);
 
-  const toggle = <T,>(s: Set<T>, v: T, set: (s: Set<T>) => void) => { const x = new Set(s); x.has(v) ? x.delete(v) : x.add(v); set(x); };
+  const toggle = <T,>(s: Set<T>, v: T, set: (s: Set<T>) => void) => {
+    const x = new Set(s);
+    if (x.has(v)) {
+      x.delete(v);
+    } else {
+      x.add(v);
+    }
+    set(x);
+  };
 
-  // Hasil pencarian: koordinat, wilayah (preset), operator, lalu opsi cari online
+  // Hasil pencarian: koordinat, wilayah (preset), kabel laut, operator, lalu opsi cari online
   type SearchResult =
     | { kind: "coord"; lon: number; lat: number }
     | { kind: "area"; p: Preset }
+    | { kind: "cable"; item: { id: string; name: string; center: [number, number]; rfs_year?: number | null; is_planned?: boolean } }
     | { kind: "op"; mnc: number; name: string; color: string }
     | { kind: "online"; query: string };
   const results = useMemo<SearchResult[]>(() => {
@@ -484,13 +534,17 @@ export default function Dashboard() {
     if (coord) return [{ kind: "coord", lon: coord[0], lat: coord[1] }];
     const s = raw.toLowerCase();
     const areas = PRESETS.filter((p) => p.label.toLowerCase().includes(s) || p.province.toLowerCase().includes(s)).map((p) => ({ kind: "area" as const, p }));
+    const cablesFound = cablesIndex
+      .filter((c) => c.name.toLowerCase().includes(s))
+      .slice(0, 4)
+      .map((c) => ({ kind: "cable" as const, item: c }));
     const opsFound = Object.entries(OPERATORS)
       .filter(([, o]) => o.name.toLowerCase().includes(s))
       .map(([mnc, o]) => ({ kind: "op" as const, mnc: Number(mnc), name: o.name, color: o.color }));
-    const list: SearchResult[] = [...areas, ...opsFound].slice(0, 6);
+    const list: SearchResult[] = [...areas, ...cablesFound, ...opsFound].slice(0, 7);
     if (raw.length >= 3) list.push({ kind: "online", query: raw }); // provinsi/kabupaten/alamat lewat Nominatim
     return list;
-  }, [q]);
+  }, [q, cablesIndex]);
 
   const applyPlace = (p: PlaceResult) => {
     setPin(null);
@@ -506,8 +560,21 @@ export default function Dashboard() {
     if (r.kind === "coord") {
       setPin([r.lon, r.lat]);
       setView({ label: "Koordinat", province: `${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}`, region: "Nasional", center: [r.lon, r.lat], zoom: 14, n: view.n + 1 });
-    } else if (r.kind === "area") setView({ ...r.p, n: view.n + 1 });
-    else setOps(new Set([r.mnc]));
+    } else if (r.kind === "area") {
+      setView({ ...r.p, n: view.n + 1 });
+    } else if (r.kind === "cable") {
+      setShow((prev) => ({ ...prev, cables: true }));
+      setView({
+        label: r.item.name,
+        province: `Kabel Laut · ${r.item.is_planned ? "Rencana" : "Operasional"}${r.item.rfs_year ? ` (RFS ${r.item.rfs_year})` : ""}`,
+        region: "Nasional",
+        center: r.item.center,
+        zoom: 7.5,
+        n: view.n + 1,
+      });
+    } else {
+      setOps(new Set([r.mnc]));
+    }
     setQ(""); topGeo.reset(); searchRef.current?.blur();
   };
 
@@ -521,7 +588,7 @@ export default function Dashboard() {
             <summary className="cursor-pointer text-center">Detail teknis</summary>
             <p className="mt-1 break-words rounded bg-slate-900/5 p-2 font-mono">{error.detail}</p>
           </details>
-          <button onClick={() => setAttempt(attempt + 1)} className={`rounded-lg bg-sky-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-400 ${focusRing}`}>
+          <button onClick={retryLoad} className={`rounded-lg bg-sky-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-400 ${focusRing}`}>
             Muat ulang data
           </button>
         </div>
@@ -885,7 +952,7 @@ export default function Dashboard() {
           tab ? (tab === "compare" ? "md:left-[492px]" : "md:left-[396px]") : "md:left-[60px]"
         }`}
       >
-        <div className="flex items-start gap-2">
+        <div className="flex items-start justify-center gap-2">
           <div className="pointer-events-auto relative w-40 shrink-0 md:w-60">
             <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500"><Icon name="search" size={14} /></span>
             <input
@@ -904,11 +971,12 @@ export default function Dashboard() {
                   <ul>
                     {results.length === 0 && <li className="px-3 py-2 text-xs text-slate-500">Tidak ada hasil</li>}
                     {results.map((r) => (
-                      <li key={r.kind === "area" ? `a-${r.p.label}` : r.kind === "op" ? `o-${r.mnc}` : r.kind}>
+                      <li key={r.kind === "area" ? `a-${r.p.label}` : r.kind === "cable" ? `c-${r.item.id}` : r.kind === "op" ? `o-${r.mnc}` : r.kind}>
                         <button onMouseDown={(e) => e.preventDefault()} onClick={() => pickResult(r)}
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-800 hover:bg-slate-900/5">
                           {r.kind === "coord" && <><Icon name="pin" size={12} /><span className="flex-1">Ke koordinat</span><span className="text-[10px] tabular-nums text-slate-500">{r.lat.toFixed(4)}, {r.lon.toFixed(4)}</span></>}
                           {r.kind === "area" && <><Icon name="pin" size={12} /><span className="flex-1">{r.p.label}</span><span className="max-w-[110px] truncate text-[10px] text-slate-500">{r.p.province}</span></>}
+                          {r.kind === "cable" && <><Line c="#38bdf8" /><span className="flex-1 truncate font-medium">{r.item.name}</span><span className="text-[10px] text-sky-700">Kabel Laut</span></>}
                           {r.kind === "op" && <><Dot c={r.color} /><span className="flex-1">{r.name}</span><span className="text-[10px] text-slate-500">Hanya operator ini</span></>}
                           {r.kind === "online" && <><Icon name="search" size={12} /><span className="flex-1 truncate">Cari “{r.query}” di OpenStreetMap</span><kbd className="rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500">↵</kbd></>}
                         </button>
@@ -928,7 +996,7 @@ export default function Dashboard() {
         </div>
 
         {(dirty || pin) && (
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-center gap-1.5">
             {region && <FilterTag onClear={() => setRegion(null)}>{region.kind}: {region.label}</FilterTag>}
             {pin && <FilterTag onClear={() => setPin(null)}>Titik {pin[1].toFixed(4)}, {pin[0].toFixed(4)}</FilterTag>}
             {opsDirty && <FilterTag onClear={() => setOps(new Set(knownOps))}>Operator {ops.size}/{knownOps.length}</FilterTag>}

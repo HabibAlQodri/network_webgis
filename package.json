@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "data:fetch": "node scripts/fetch-network-data.mjs",
+    "data:prepare": "node scripts/prepare-data.mjs"
   },
   "dependencies": {
     "maplibre-gl": "^5.24.0",
