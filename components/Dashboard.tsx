@@ -351,7 +351,7 @@ export default function Dashboard() {
 
   const openTab = (t: Tab) => {
     if (tab === t) { setTab(null); return; }
-    setTab(t); setLastTab(t);
+    setTab(t); setLastTab(t); setLegendOpen(false);
   };
 
   // Batas geser legenda = area peta dikurangi margin 8px (posisi dasar = posisi sekarang dikurangi offset)
@@ -658,7 +658,7 @@ export default function Dashboard() {
       {/* Panel melayang: hanya satu bagian terbuka pada satu waktu */}
       <aside
         aria-label="Panel kontrol" aria-hidden={!tab} inert={!tab}
-        className={`absolute inset-x-2 bottom-[68px] z-20 flex max-h-[62%] flex-col overflow-hidden rounded-2xl transition duration-200 md:inset-x-auto md:bottom-auto md:left-[60px] md:top-3 md:max-h-[calc(100%-1.5rem)] ${lastTab === "compare" ? "md:w-[26rem]" : "md:w-80"} ${glass} ${
+        className={`absolute inset-x-2 bottom-16 z-30 flex max-h-[55vh] flex-col overflow-hidden rounded-2xl transition duration-200 md:inset-x-auto md:bottom-auto md:left-[60px] md:top-3 md:max-h-[calc(100%-1.5rem)] ${lastTab === "compare" ? "md:w-[26rem]" : "md:w-80"} ${glass} ${
           tab ? "translate-y-0 opacity-100 md:translate-x-0" : "pointer-events-none translate-y-2 opacity-0 md:-translate-x-2 md:translate-y-0"
         }`}
       >
@@ -1018,8 +1018,71 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Legenda ringkas, bisa dilipat */}
-      <div ref={legendRef} style={{ transform: `translate(${legendPos.x}px, ${legendPos.y}px)` }} className="absolute bottom-[68px] right-3 z-10 md:bottom-14">
+      {/* Legenda ringkas — mobile: bottom-sheet di atas nav; desktop: floating draggable */}
+
+      {/* === Mobile legend (< md) === */}
+      {/* Backdrop gelap saat legenda terbuka di mobile */}
+      {legendOpen && (
+        <div
+          className="fixed inset-0 z-[25] bg-black/20 md:hidden"
+          onClick={() => setLegendOpen(false)}
+        />
+      )}
+      {/* Tombol Legenda mobile (selalu terlihat saat legenda tertutup) */}
+      {!legendOpen && (
+        <button
+          onClick={() => setLegendOpen(true)} aria-expanded={false}
+          className={`absolute bottom-16 right-3 z-10 flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-800 md:hidden ${glass} ${focusRing}`}
+        >
+          Legenda
+          <span className="rotate-180"><Icon name="chevron" size={10} /></span>
+        </button>
+      )}
+      {/* Bottom sheet legenda mobile */}
+      <div
+        className={`fixed inset-x-0 bottom-0 z-[25] md:hidden transition-transform duration-300 ease-out ${legendOpen ? "translate-y-0" : "translate-y-full pointer-events-none"}`}
+      >
+        {/* Konten legenda mobile */}
+        <div className={`rounded-t-2xl ${glass}`}>
+          {/* Handle bar + close */}
+          <div className="flex items-center justify-between px-4 pt-3 pb-1">
+            <span className="text-[12px] font-medium text-slate-700">Legenda</span>
+            <button
+              onClick={() => setLegendOpen(false)} aria-label="Tutup legenda"
+              className={`rounded p-1 text-slate-500 hover:text-slate-900 ${focusRing}`}
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+          <div className="flex justify-center pb-1">
+            <span className="h-1 w-8 rounded-full bg-slate-300" />
+          </div>
+          <div className="space-y-3 px-4 pb-5 pt-1 text-[12px] text-slate-700">
+            <div>
+              <div className="mb-1.5 text-[11px] font-medium text-slate-500">Sel BTS per operator</div>
+              <div className="grid grid-cols-3 gap-x-3 gap-y-1.5">
+                {Object.values(OPERATORS).slice(0, 5).map((o) => (
+                  <span key={o.name} className="flex items-center gap-1.5"><Dot c={o.color} />{o.name}</span>
+                ))}
+                <span className="flex items-center gap-1.5"><Dot c={OTHER_COLOR} />Lainnya</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+              <span className="flex items-center gap-1.5"><Dot c="#fbbf24" />Menara OSM</span>
+              <span className="flex items-center gap-1.5"><Dot c="#0891b2" ring />Landing station</span>
+              <Legend c="#38bdf8">Kabel laut</Legend>
+              <Legend c="#10b981">Fiber operasional</Legend>
+              <Legend c="#ca8a04">Fiber rencana</Legend>
+              <Legend c="#9333ea">Microwave</Legend>
+            </div>
+          </div>
+          {/* Safe area spacing for devices with home indicator */}
+          <div className="h-[env(safe-area-inset-bottom,0px)]" />
+        </div>
+      </div>
+
+      {/* === Desktop legend (>= md) === */}
+      <div ref={legendRef} style={{ transform: `translate(${legendPos.x}px, ${legendPos.y}px)` }} className="absolute bottom-14 right-3 z-10 hidden md:block">
         {legendOpen && (
           <div {...dragProps} title="Seret untuk memindahkan" className={`mb-2 w-52 cursor-grab touch-none select-none space-y-2.5 rounded-xl p-3 text-[11px] text-slate-700 active:cursor-grabbing ${glass}`}>
             <div>
@@ -1063,7 +1126,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="pointer-events-none absolute bottom-[68px] left-3 z-10 max-w-[60%] rounded-lg bg-white/90 shadow-lg px-3 py-1.5 backdrop-blur md:bottom-7 md:left-[60px] md:max-w-xs">
+      <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[55%] rounded-lg bg-white/90 shadow-lg px-3 py-1.5 backdrop-blur md:bottom-7 md:left-[60px] md:max-w-xs">
         <div className="flex items-center gap-1.5 text-[13px] font-medium text-slate-900">
           <span className="text-sky-700"><Icon name="pin" size={12} /></span>
           <span className="truncate">{place.name}</span>
