@@ -663,9 +663,14 @@ export default function Dashboard() {
         }`}
       >
         <header className="flex items-center justify-between gap-3 border-b border-slate-900/10 px-4 py-3">
-          <div className="min-w-0">
-            <h1 className="truncate text-sm font-semibold">{panelTitle[lastTab]}</h1>
-            <p className="truncate text-[11px] text-slate-500">Peta Infrastruktur Jaringan & Seluler Indonesia</p>
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-sky-500 text-white shadow-sm shadow-sky-500/30">
+              <Icon name="layers" size={18} />
+            </span>
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-semibold">{panelTitle[lastTab]}</h1>
+              <p className="truncate text-[11px] text-slate-500">Peta Infrastruktur Jaringan & Seluler Indonesia</p>
+            </div>
           </div>
           <button onClick={() => setTab(null)} aria-label="Tutup panel" className={`rounded p-1 text-slate-600 hover:bg-slate-900/5 hover:text-slate-900 ${focusRing}`}>
             <Icon name="close" />
