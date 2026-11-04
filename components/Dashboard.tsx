@@ -205,7 +205,7 @@ function QuickToggle({ on, onClick, swatch, label }: { on: boolean; onClick: () 
       }`}
     >
       <span className={on ? "" : "opacity-40"}>{swatch}</span>
-      <span className="hidden sm:inline">{label}</span>
+      <span>{label}</span>
     </button>
   );
 }
@@ -639,26 +639,82 @@ export default function Dashboard() {
   const panelTitle: Record<Tab, string> = { layers: "Layer & peta dasar", filter: "Filter data", area: "Wilayah", compare: "Bandingkan operator", stats: "Ringkasan", export: "Ekspor data" };
 
   return (
-    <main className="relative h-screen overflow-hidden bg-slate-50 text-slate-900">
-      <MapView cells={data.cells} mask={calc.mask} sourceIdx={regionIdx} filter={cellFilter} region={region} marker={pin} towers={data.towers} show={show} mode={mode} view={view} basemap={basemap} onViewport={setVp} />
+    <main className="relative flex h-[100dvh] flex-col overflow-hidden bg-slate-50 text-slate-900 md:block md:h-screen">
 
-      {/* Rail ikon: satu-satunya elemen permanen di kiri */}
-      <nav
-        aria-label="Menu utama"
-        className={`absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 gap-1 rounded-2xl p-1 md:bottom-auto md:left-3 md:top-3 md:translate-x-0 md:flex-col ${glass}`}
+      {/* Toolbar atas: pencarian + toggle layer cepat + chip filter aktif */}
+      <div
+        className={`relative z-20 flex shrink-0 flex-col gap-1.5 border-b border-slate-900/10 bg-white/95 px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] shadow-sm md:pointer-events-none md:absolute md:left-3 md:right-14 md:top-3 md:gap-2 md:border-0 md:bg-transparent md:p-0 md:shadow-none md:transition-[left] md:duration-200 ${
+          tab ? (tab === "compare" ? "md:left-[492px]" : "md:left-[396px]") : "md:left-[60px]"
+        }`}
       >
-        <RailBtn icon="layers" label="Layer & peta dasar" active={tab === "layers"} onClick={() => openTab("layers")} />
-        <RailBtn icon="filter" label="Filter data" active={tab === "filter"} badge={dirty} onClick={() => openTab("filter")} />
-        <RailBtn icon="pin" label="Wilayah" active={tab === "area"} badge={!!region} onClick={() => openTab("area")} />
-        <RailBtn icon="compare" label="Bandingkan operator" active={tab === "compare"} onClick={() => openTab("compare")} />
-        <RailBtn icon="chart" label="Ringkasan" active={tab === "stats"} onClick={() => openTab("stats")} />
-        <RailBtn icon="download" label="Ekspor data" active={tab === "export"} onClick={() => openTab("export")} />
-      </nav>
+        <div className="flex flex-col gap-1.5 md:flex-row md:items-start md:justify-center md:gap-2">
+          <div className="pointer-events-auto relative w-full shrink-0 md:w-60">
+            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500"><Icon name="search" size={14} /></span>
+            <input
+              ref={searchRef} value={q} onChange={(e) => { setQ(e.target.value); topGeo.reset(); }}
+              onFocus={() => setSearchFocus(true)} onBlur={() => setTimeout(() => setSearchFocus(false), 120)}
+              onKeyDown={(e) => { if (e.key === "Enter" && results[0]) pickResult(results[0]); }}
+              placeholder="Kota, provinsi, koordinat, operator" aria-label="Cari wilayah, koordinat, atau operator"
+              className={`w-full rounded-xl py-2 pl-8 pr-7 text-xs text-slate-900 placeholder:text-slate-500 ${glass} ${focusRing}`}
+            />
+            {!q && <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500 md:block">/</kbd>}
+            {searchFocus && q.trim() && (
+              <div className={`absolute left-0 top-full mt-1 max-h-[60vh] w-72 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl py-1 ${glass}`}>
+                {topGeo.state.status !== "idle" ? (
+                  <PlaceList state={topGeo.state} onPick={pickPlace} />
+                ) : (
+                  <ul>
+                    {results.length === 0 && <li className="px-3 py-2 text-xs text-slate-500">Tidak ada hasil</li>}
+                    {results.map((r) => (
+                      <li key={r.kind === "area" ? `a-${r.p.label}` : r.kind === "cable" ? `c-${r.item.id}` : r.kind === "op" ? `o-${r.mnc}` : r.kind}>
+                        <button onMouseDown={(e) => e.preventDefault()} onClick={() => pickResult(r)}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-800 hover:bg-slate-900/5">
+                          {r.kind === "coord" && <><Icon name="pin" size={12} /><span className="flex-1">Ke koordinat</span><span className="text-[10px] tabular-nums text-slate-500">{r.lat.toFixed(4)}, {r.lon.toFixed(4)}</span></>}
+                          {r.kind === "area" && <><Icon name="pin" size={12} /><span className="flex-1">{r.p.label}</span><span className="max-w-[110px] truncate text-[10px] text-slate-500">{r.p.province}</span></>}
+                          {r.kind === "cable" && <><Line c="#38bdf8" /><span className="flex-1 truncate font-medium">{r.item.name}</span><span className="text-[10px] text-sky-700">Kabel Laut</span></>}
+                          {r.kind === "op" && <><Dot c={r.color} /><span className="flex-1">{r.name}</span><span className="text-[10px] text-slate-500">Hanya operator ini</span></>}
+                          {r.kind === "online" && <><Icon name="search" size={12} /><span className="flex-1 truncate">Cari “{r.query}” di OpenStreetMap</span><kbd className="rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500">↵</kbd></>}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
 
+          <div className={`pointer-events-auto flex w-full min-w-0 gap-0.5 overflow-x-auto rounded-xl p-0.5 [scrollbar-width:none] md:w-auto md:p-1 ${glass}`} role="group" aria-label="Layer cepat">
+            {quick.map(([k, label, sw]) => (
+              <QuickToggle key={k} on={show[k]} onClick={() => setShow({ ...show, [k]: !show[k] })} swatch={sw} label={label} />
+            ))}
+          </div>
+        </div>
+
+        {(dirty || pin) && (
+          <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] md:flex-wrap md:justify-center md:overflow-visible">
+            {region && <FilterTag onClear={() => setRegion(null)}>{region.kind}: {region.label}</FilterTag>}
+            {pin && <FilterTag onClear={() => setPin(null)}>Titik {pin[1].toFixed(4)}, {pin[0].toFixed(4)}</FilterTag>}
+            {opsDirty && <FilterTag onClear={() => setOps(new Set(knownOps))}>Operator {ops.size}/{knownOps.length}</FilterTag>}
+            {radiosDirty && (
+              <FilterTag onClear={() => setRadios(new Set(allRadios))}>
+                {radios.size ? [...radios].sort().map((i) => RADIOS[i]).join(", ") : "Tanpa teknologi"}
+              </FilterTag>
+            )}
+            {samplesDirty && <FilterTag onClear={() => setMinSamples(1)}>Sampel ≥ {minSamples}</FilterTag>}
+            {dirty && <button onClick={resetFilters} className={`pointer-events-auto shrink-0 rounded px-1.5 text-[11px] text-slate-700 underline-offset-2 hover:text-slate-900 hover:underline ${focusRing}`}>
+              Reset
+            </button>}
+          </div>
+        )}
+      </div>
+
+      {/* Area peta: di mobile berada di antara bar atas & bawah (tidak tertutup); di desktop memenuhi layar */}
+      <div className="relative min-h-0 flex-1 md:absolute md:inset-0 md:flex-none">
+  <MapView cells={data.cells} mask={calc.mask} sourceIdx={regionIdx} filter={cellFilter} region={region} marker={pin} towers={data.towers} show={show} mode={mode} view={view} basemap={basemap} onViewport={setVp} />
       {/* Panel melayang: hanya satu bagian terbuka pada satu waktu */}
       <aside
         aria-label="Panel kontrol" aria-hidden={!tab} inert={!tab}
-        className={`absolute inset-x-2 bottom-16 z-30 flex max-h-[55vh] flex-col overflow-hidden rounded-2xl transition duration-200 md:inset-x-auto md:bottom-auto md:left-[60px] md:top-3 md:max-h-[calc(100%-1.5rem)] ${lastTab === "compare" ? "md:w-[26rem]" : "md:w-80"} ${glass} ${
+        className={`absolute inset-x-2 bottom-2 z-30 flex max-h-[80%] flex-col overflow-hidden rounded-2xl transition duration-200 md:inset-x-auto md:bottom-auto md:left-[60px] md:top-3 md:max-h-[calc(100%-1.5rem)] ${lastTab === "compare" ? "md:w-[26rem]" : "md:w-80"} ${glass} ${
           tab ? "translate-y-0 opacity-100 md:translate-x-0" : "pointer-events-none translate-y-2 opacity-0 md:-translate-x-2 md:translate-y-0"
         }`}
       >
@@ -951,123 +1007,22 @@ export default function Dashboard() {
         </div>
       </aside>
 
-      {/* Toolbar atas: pencarian + toggle layer cepat + chip filter aktif */}
-      <div
-        className={`pointer-events-none absolute left-3 right-14 top-3 z-20 flex flex-col gap-2 transition-[left] duration-200 ${
-          tab ? (tab === "compare" ? "md:left-[492px]" : "md:left-[396px]") : "md:left-[60px]"
-        }`}
-      >
-        <div className="flex items-start justify-center gap-2">
-          <div className="pointer-events-auto relative w-40 shrink-0 md:w-60">
-            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500"><Icon name="search" size={14} /></span>
-            <input
-              ref={searchRef} value={q} onChange={(e) => { setQ(e.target.value); topGeo.reset(); }}
-              onFocus={() => setSearchFocus(true)} onBlur={() => setTimeout(() => setSearchFocus(false), 120)}
-              onKeyDown={(e) => { if (e.key === "Enter" && results[0]) pickResult(results[0]); }}
-              placeholder="Kota, provinsi, koordinat, operator" aria-label="Cari wilayah, koordinat, atau operator"
-              className={`w-full rounded-xl py-2 pl-8 pr-7 text-xs text-slate-900 placeholder:text-slate-500 ${glass} ${focusRing}`}
-            />
-            {!q && <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500 md:block">/</kbd>}
-            {searchFocus && q.trim() && (
-              <div className={`absolute left-0 top-full mt-1 max-h-[60vh] w-72 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl py-1 ${glass}`}>
-                {topGeo.state.status !== "idle" ? (
-                  <PlaceList state={topGeo.state} onPick={pickPlace} />
-                ) : (
-                  <ul>
-                    {results.length === 0 && <li className="px-3 py-2 text-xs text-slate-500">Tidak ada hasil</li>}
-                    {results.map((r) => (
-                      <li key={r.kind === "area" ? `a-${r.p.label}` : r.kind === "cable" ? `c-${r.item.id}` : r.kind === "op" ? `o-${r.mnc}` : r.kind}>
-                        <button onMouseDown={(e) => e.preventDefault()} onClick={() => pickResult(r)}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-800 hover:bg-slate-900/5">
-                          {r.kind === "coord" && <><Icon name="pin" size={12} /><span className="flex-1">Ke koordinat</span><span className="text-[10px] tabular-nums text-slate-500">{r.lat.toFixed(4)}, {r.lon.toFixed(4)}</span></>}
-                          {r.kind === "area" && <><Icon name="pin" size={12} /><span className="flex-1">{r.p.label}</span><span className="max-w-[110px] truncate text-[10px] text-slate-500">{r.p.province}</span></>}
-                          {r.kind === "cable" && <><Line c="#38bdf8" /><span className="flex-1 truncate font-medium">{r.item.name}</span><span className="text-[10px] text-sky-700">Kabel Laut</span></>}
-                          {r.kind === "op" && <><Dot c={r.color} /><span className="flex-1">{r.name}</span><span className="text-[10px] text-slate-500">Hanya operator ini</span></>}
-                          {r.kind === "online" && <><Icon name="search" size={12} /><span className="flex-1 truncate">Cari “{r.query}” di OpenStreetMap</span><kbd className="rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500">↵</kbd></>}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className={`pointer-events-auto flex min-w-0 gap-0.5 overflow-x-auto rounded-xl p-1 ${glass}`} role="group" aria-label="Layer cepat">
-            {quick.map(([k, label, sw]) => (
-              <QuickToggle key={k} on={show[k]} onClick={() => setShow({ ...show, [k]: !show[k] })} swatch={sw} label={label} />
-            ))}
-          </div>
-        </div>
-
-        {(dirty || pin) && (
-          <div className="flex flex-wrap items-center justify-center gap-1.5">
-            {region && <FilterTag onClear={() => setRegion(null)}>{region.kind}: {region.label}</FilterTag>}
-            {pin && <FilterTag onClear={() => setPin(null)}>Titik {pin[1].toFixed(4)}, {pin[0].toFixed(4)}</FilterTag>}
-            {opsDirty && <FilterTag onClear={() => setOps(new Set(knownOps))}>Operator {ops.size}/{knownOps.length}</FilterTag>}
-            {radiosDirty && (
-              <FilterTag onClear={() => setRadios(new Set(allRadios))}>
-                {radios.size ? [...radios].sort().map((i) => RADIOS[i]).join(", ") : "Tanpa teknologi"}
-              </FilterTag>
-            )}
-            {samplesDirty && <FilterTag onClear={() => setMinSamples(1)}>Sampel ≥ {minSamples}</FilterTag>}
-            {dirty && <button onClick={resetFilters} className={`pointer-events-auto rounded px-1.5 text-[11px] text-slate-700 underline-offset-2 hover:text-slate-900 hover:underline ${focusRing}`}>
-              Reset
-            </button>}
-          </div>
-        )}
-      </div>
-
       {/* Legenda ringkas — mobile: bottom-sheet di atas nav; desktop: floating draggable */}
 
-      {/* === Mobile legend (< md) === */}
-      {/* Backdrop gelap saat legenda terbuka di mobile */}
-      {legendOpen && (
-        <div
-          className="fixed inset-0 z-[25] bg-black/20 md:hidden"
-          onClick={() => setLegendOpen(false)}
-        />
-      )}
-      {/* Tombol Legenda mobile (selalu terlihat saat legenda tertutup) */}
-      {!legendOpen && (
-        <button
-          onClick={() => setLegendOpen(true)} aria-expanded={false}
-          className={`absolute bottom-16 right-3 z-10 flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-800 md:hidden ${glass} ${focusRing}`}
-        >
-          Legenda
-          <span className="rotate-180"><Icon name="chevron" size={10} /></span>
-        </button>
-      )}
-      {/* Bottom sheet legenda mobile */}
-      <div
-        className={`fixed inset-x-0 bottom-0 z-[25] md:hidden transition-transform duration-300 ease-out ${legendOpen ? "translate-y-0" : "translate-y-full pointer-events-none"}`}
-      >
-        {/* Konten legenda mobile */}
-        <div className={`rounded-t-2xl ${glass}`}>
-          {/* Handle bar + close */}
-          <div className="flex items-center justify-between px-4 pt-3 pb-1">
-            <span className="text-[12px] font-medium text-slate-700">Legenda</span>
-            <button
-              onClick={() => setLegendOpen(false)} aria-label="Tutup legenda"
-              className={`rounded p-1 text-slate-500 hover:text-slate-900 ${focusRing}`}
-            >
-              <Icon name="close" size={14} />
-            </button>
-          </div>
-          <div className="flex justify-center pb-1">
-            <span className="h-1 w-8 rounded-full bg-slate-300" />
-          </div>
-          <div className="space-y-3 px-4 pb-5 pt-1 text-[12px] text-slate-700">
+      {/* === Mobile legend (< md): popover kecil di kanan-bawah area peta; skala ada di kiri-bawah === */}
+      <div className="absolute bottom-10 right-2 z-10 flex flex-col items-end gap-1.5 md:hidden">
+        {legendOpen && (
+          <div className={`w-52 max-w-[calc(100vw-1rem)] space-y-2 rounded-xl p-2.5 text-[11px] text-slate-700 ${glass}`}>
             <div>
-              <div className="mb-1.5 text-[11px] font-medium text-slate-500">Sel BTS per operator</div>
-              <div className="grid grid-cols-3 gap-x-3 gap-y-1.5">
+              <div className="mb-1 text-slate-500">Sel BTS per operator</div>
+              <div className="grid grid-cols-2 gap-x-2 gap-y-1">
                 {Object.values(OPERATORS).slice(0, 5).map((o) => (
                   <span key={o.name} className="flex items-center gap-1.5"><Dot c={o.color} />{o.name}</span>
                 ))}
                 <span className="flex items-center gap-1.5"><Dot c={OTHER_COLOR} />Lainnya</span>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+            <div className="space-y-1">
               <span className="flex items-center gap-1.5"><Dot c="#fbbf24" />Menara OSM</span>
               <span className="flex items-center gap-1.5"><Dot c="#0891b2" ring />Landing station</span>
               <Legend c="#38bdf8">Kabel laut</Legend>
@@ -1076,9 +1031,14 @@ export default function Dashboard() {
               <Legend c="#9333ea">Microwave</Legend>
             </div>
           </div>
-          {/* Safe area spacing for devices with home indicator */}
-          <div className="h-[env(safe-area-inset-bottom,0px)]" />
-        </div>
+        )}
+        <button
+          onClick={() => setLegendOpen(!legendOpen)} aria-expanded={legendOpen}
+          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-800 ${glass} ${focusRing}`}
+        >
+          Legenda
+          <span className={`transition ${legendOpen ? "" : "rotate-180"}`}><Icon name="chevron" size={10} /></span>
+        </button>
       </div>
 
       {/* === Desktop legend (>= md) === */}
@@ -1126,13 +1086,37 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="pointer-events-none absolute bottom-16 left-3 z-10 max-w-[55%] rounded-lg bg-white/90 shadow-lg px-3 py-1.5 backdrop-blur md:bottom-7 md:left-[60px] md:max-w-xs">
+      <div className="pointer-events-none absolute bottom-7 left-[60px] z-10 hidden max-w-xs rounded-lg bg-white/90 px-3 py-1.5 shadow-lg backdrop-blur md:block">
         <div className="flex items-center gap-1.5 text-[13px] font-medium text-slate-900">
           <span className="text-sky-700"><Icon name="pin" size={12} /></span>
           <span className="truncate">{place.name}</span>
         </div>
         <div className="truncate text-[11px] text-slate-600">{place.sub}</div>
-        <div className="hidden text-[11px] tabular-nums text-slate-700 md:block">{fmt(vp.cells)} sel, {fmt(vp.towers)} menara dalam tampilan</div>
+        <div className="text-[11px] tabular-nums text-slate-700">{fmt(vp.cells)} sel, {fmt(vp.towers)} menara dalam tampilan</div>
+      </div>
+      </div>
+
+      {/* Bar bawah: mobile = info lokasi + menu; desktop = rail ikon melayang di kiri */}
+      <div className="relative z-20 shrink-0 border-t border-slate-900/10 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-2px_8px_rgba(15,23,42,.06)] md:contents">
+        <div className="flex items-center justify-between gap-2 px-3 pt-1.5 text-[11px] text-slate-600 md:hidden">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="text-sky-700"><Icon name="pin" size={12} /></span>
+            <span className="truncate font-medium text-slate-900">{place.name}</span>
+            <span className="truncate">· {place.sub}</span>
+          </span>
+          <span className="shrink-0 tabular-nums">{fmt(vp.cells)} sel</span>
+        </div>
+      <nav
+        aria-label="Menu utama"
+        className={`flex justify-around gap-1 px-2 py-1 md:absolute md:left-3 md:top-3 md:z-20 md:flex-col md:justify-start md:rounded-2xl md:p-1 md:border md:border-slate-900/10 md:bg-white/90 md:shadow-xl md:backdrop-blur`}
+      >
+        <RailBtn icon="layers" label="Layer & peta dasar" active={tab === "layers"} onClick={() => openTab("layers")} />
+        <RailBtn icon="filter" label="Filter data" active={tab === "filter"} badge={dirty} onClick={() => openTab("filter")} />
+        <RailBtn icon="pin" label="Wilayah" active={tab === "area"} badge={!!region} onClick={() => openTab("area")} />
+        <RailBtn icon="compare" label="Bandingkan operator" active={tab === "compare"} onClick={() => openTab("compare")} />
+        <RailBtn icon="chart" label="Ringkasan" active={tab === "stats"} onClick={() => openTab("stats")} />
+        <RailBtn icon="download" label="Ekspor data" active={tab === "export"} onClick={() => openTab("export")} />
+      </nav>
       </div>
     </main>
   );

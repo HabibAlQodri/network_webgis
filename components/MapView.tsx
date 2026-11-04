@@ -69,7 +69,7 @@ const POPUP_CSS = `
 .maplibregl-ctrl-group{background:rgba(255,255,255,.92)!important;border:1px solid rgba(15,23,42,.1);border-radius:12px!important;box-shadow:0 4px 14px rgba(15,23,42,.12)!important;overflow:hidden}
 .maplibregl-ctrl-group button+button{border-top:1px solid rgba(15,23,42,.1)!important}
 .maplibregl-ctrl-group button:hover{background:#f1f5f9!important}
-.maplibregl-ctrl-scale{background:rgba(255,255,255,.8);color:#334155;border-color:#64748b}
+.maplibregl-ctrl-scale{background:rgba(255,255,255,.85);color:#334155;border-color:#64748b;font-size:11px;font-weight:500}
 .maplibregl-ctrl-attrib{background:rgba(255,255,255,.75)!important;color:#475569}
 .maplibregl-ctrl-attrib a{color:#334155}
 `;
@@ -153,8 +153,18 @@ export default function MapView({ cells, mask, sourceIdx, filter, region, marker
     ro.observe(box.current!);
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: false }), "top-right");
-    map.addControl(new maplibregl.FullscreenControl({ container: box.current!.parentElement ?? undefined }), "top-right");
-    map.addControl(new maplibregl.ScaleControl(), "bottom-right");
+    // Fullscreen mencakup seluruh dashboard (bar atas/bawah tetap tampil)
+    map.addControl(new maplibregl.FullscreenControl({ container: box.current!.closest("main") ?? box.current!.parentElement ?? undefined }), "top-right");
+    // Skala: kiri-bawah di mobile (agar tidak tertutup legenda/tombol di kanan), kanan-bawah di desktop
+    const mq = window.matchMedia("(max-width: 767px)");
+    let scale: maplibregl.ScaleControl | null = null;
+    const placeScale = () => {
+      if (scale) map.removeControl(scale);
+      scale = new maplibregl.ScaleControl({ maxWidth: mq.matches ? 90 : 100 });
+      map.addControl(scale, mq.matches ? "bottom-left" : "bottom-right");
+    };
+    placeScale();
+    mq.addEventListener("change", placeScale);
 
     map.on("load", () => {
       // 1. Data Sumber
@@ -331,7 +341,7 @@ export default function MapView({ cells, mask, sourceIdx, filter, region, marker
       map.on("moveend", report);
       setReady(true);
     });
-    return () => { popupRef.current?.remove(); markerRef.current?.remove(); markerRef.current = null; map.remove(); mapRef.current = null; };
+    return () => { mq.removeEventListener("change", placeScale); popupRef.current?.remove(); markerRef.current?.remove(); markerRef.current = null; map.remove(); mapRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
