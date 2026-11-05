@@ -1,5 +1,6 @@
 "use client";
 import dynamic from "next/dynamic";
+import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { OPERATORS, OTHER_COLOR, PRESETS, RADIOS, RADIO_COLORS, REGIONS, type Preset } from "@/lib/config";
 import { DataLoadError, isAbortError, loadDataset, type Dataset, type LoadStep } from "@/lib/data";
@@ -644,49 +645,61 @@ export default function Dashboard() {
       {/* Toolbar atas: pencarian + toggle layer cepat + chip filter aktif */}
       <div
         className={`relative z-20 flex shrink-0 flex-col gap-1.5 border-b border-slate-900/10 bg-white/95 px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] shadow-sm md:pointer-events-none md:absolute md:left-3 md:right-14 md:top-3 md:gap-2 md:border-0 md:bg-transparent md:p-0 md:shadow-none md:transition-[left] md:duration-200 ${
-          tab ? (tab === "compare" ? "md:left-[492px]" : "md:left-[396px]") : "md:left-[60px]"
+          tab ? (tab === "compare" ? "md:left-[492px]" : "md:left-[396px]") : "md:left-[76px]"
         }`}
       >
-        <div className="flex flex-col gap-1.5 md:flex-row md:items-start md:justify-center md:gap-2">
-          <div className="pointer-events-auto relative w-full shrink-0 md:w-60">
-            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500"><Icon name="search" size={14} /></span>
-            <input
-              ref={searchRef} value={q} onChange={(e) => { setQ(e.target.value); topGeo.reset(); }}
-              onFocus={() => setSearchFocus(true)} onBlur={() => setTimeout(() => setSearchFocus(false), 120)}
-              onKeyDown={(e) => { if (e.key === "Enter" && results[0]) pickResult(results[0]); }}
-              placeholder="Kota, provinsi, koordinat, operator" aria-label="Cari wilayah, koordinat, atau operator"
-              className={`w-full rounded-xl py-2 pl-8 pr-7 text-xs text-slate-900 placeholder:text-slate-500 ${glass} ${focusRing}`}
-            />
-            {!q && <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500 md:block">/</kbd>}
-            {searchFocus && q.trim() && (
-              <div className={`absolute left-0 top-full mt-1 max-h-[60vh] w-72 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl py-1 ${glass}`}>
-                {topGeo.state.status !== "idle" ? (
-                  <PlaceList state={topGeo.state} onPick={pickPlace} />
-                ) : (
-                  <ul>
-                    {results.length === 0 && <li className="px-3 py-2 text-xs text-slate-500">Tidak ada hasil</li>}
-                    {results.map((r) => (
-                      <li key={r.kind === "area" ? `a-${r.p.label}` : r.kind === "cable" ? `c-${r.item.id}` : r.kind === "op" ? `o-${r.mnc}` : r.kind}>
-                        <button onMouseDown={(e) => e.preventDefault()} onClick={() => pickResult(r)}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-800 hover:bg-slate-900/5">
-                          {r.kind === "coord" && <><Icon name="pin" size={12} /><span className="flex-1">Ke koordinat</span><span className="text-[10px] tabular-nums text-slate-500">{r.lat.toFixed(4)}, {r.lon.toFixed(4)}</span></>}
-                          {r.kind === "area" && <><Icon name="pin" size={12} /><span className="flex-1">{r.p.label}</span><span className="max-w-[110px] truncate text-[10px] text-slate-500">{r.p.province}</span></>}
-                          {r.kind === "cable" && <><Line c="#38bdf8" /><span className="flex-1 truncate font-medium">{r.item.name}</span><span className="text-[10px] text-sky-700">Kabel Laut</span></>}
-                          {r.kind === "op" && <><Dot c={r.color} /><span className="flex-1">{r.name}</span><span className="text-[10px] text-slate-500">Hanya operator ini</span></>}
-                          {r.kind === "online" && <><Icon name="search" size={12} /><span className="flex-1 truncate">Cari “{r.query}” di OpenStreetMap</span><kbd className="rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500">↵</kbd></>}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
+        <div className="flex flex-col gap-1.5 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between lg:gap-2">
+          <div className={`pointer-events-auto flex w-fit shrink-0 items-center gap-2 rounded-xl px-2.5 py-1.5 ${glass}`}>
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-50 ring-1 ring-slate-900/5">
+              <Image src="/Jejaringnusa_removebg.png" alt="" width={32} height={32} className="h-8 w-8 object-contain" />
+            </span>
+            <div className="leading-tight">
+              <p className="text-[11px] font-bold tracking-[0.12em] text-slate-900">JEJARINGNUSA</p>
+              <p className="mt-0.5 text-[10px] font-medium text-slate-500">Peta Infrastruktur Seluler</p>
+            </div>
           </div>
 
-          <div className={`pointer-events-auto flex w-full min-w-0 gap-0.5 overflow-x-auto rounded-xl p-0.5 [scrollbar-width:none] md:w-auto md:p-1 ${glass}`} role="group" aria-label="Layer cepat">
-            {quick.map(([k, label, sw]) => (
-              <QuickToggle key={k} on={show[k]} onClick={() => setShow({ ...show, [k]: !show[k] })} swatch={sw} label={label} />
-            ))}
+          <div className="flex w-full min-w-0 flex-col gap-1.5 lg:w-auto lg:flex-row lg:items-start lg:gap-2">
+            <div className="pointer-events-auto relative w-full shrink-0 md:w-60">
+              <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500"><Icon name="search" size={14} /></span>
+              <input
+                ref={searchRef} value={q} onChange={(e) => { setQ(e.target.value); topGeo.reset(); }}
+                onFocus={() => setSearchFocus(true)} onBlur={() => setTimeout(() => setSearchFocus(false), 120)}
+                onKeyDown={(e) => { if (e.key === "Enter" && results[0]) pickResult(results[0]); }}
+                placeholder="Kota, provinsi, koordinat, operator" aria-label="Cari wilayah, koordinat, atau operator"
+                className={`w-full rounded-xl py-2 pl-8 pr-7 text-xs text-slate-900 placeholder:text-slate-500 ${glass} ${focusRing}`}
+              />
+              {!q && <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500 md:block">/</kbd>}
+              {searchFocus && q.trim() && (
+                <div className={`absolute left-0 top-full mt-1 max-h-[60vh] w-72 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl py-1 ${glass}`}>
+                  {topGeo.state.status !== "idle" ? (
+                    <PlaceList state={topGeo.state} onPick={pickPlace} />
+                  ) : (
+                    <ul>
+                      {results.length === 0 && <li className="px-3 py-2 text-xs text-slate-500">Tidak ada hasil</li>}
+                      {results.map((r) => (
+                        <li key={r.kind === "area" ? `a-${r.p.label}` : r.kind === "cable" ? `c-${r.item.id}` : r.kind === "op" ? `o-${r.mnc}` : r.kind}>
+                          <button onMouseDown={(e) => e.preventDefault()} onClick={() => pickResult(r)}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-800 hover:bg-slate-900/5">
+                            {r.kind === "coord" && <><Icon name="pin" size={12} /><span className="flex-1">Ke koordinat</span><span className="text-[10px] tabular-nums text-slate-500">{r.lat.toFixed(4)}, {r.lon.toFixed(4)}</span></>}
+                            {r.kind === "area" && <><Icon name="pin" size={12} /><span className="flex-1">{r.p.label}</span><span className="max-w-[110px] truncate text-[10px] text-slate-500">{r.p.province}</span></>}
+                            {r.kind === "cable" && <><Line c="#38bdf8" /><span className="flex-1 truncate font-medium">{r.item.name}</span><span className="text-[10px] text-sky-700">Kabel Laut</span></>}
+                            {r.kind === "op" && <><Dot c={r.color} /><span className="flex-1">{r.name}</span><span className="text-[10px] text-slate-500">Hanya operator ini</span></>}
+                            {r.kind === "online" && <><Icon name="search" size={12} /><span className="flex-1 truncate">Cari “{r.query}” di OpenStreetMap</span><kbd className="rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500">↵</kbd></>}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className={`pointer-events-auto flex w-full min-w-0 gap-0.5 overflow-x-auto rounded-xl p-0.5 [scrollbar-width:none] md:w-auto md:p-1 ${glass}`} role="group" aria-label="Layer cepat">
+              {quick.map(([k, label, sw]) => (
+                <QuickToggle key={k} on={show[k]} onClick={() => setShow({ ...show, [k]: !show[k] })} swatch={sw} label={label} />
+              ))}
+            </div>
           </div>
         </div>
 

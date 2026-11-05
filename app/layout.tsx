@@ -6,8 +6,11 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Dashboard Peta Infrastruktur Seluler",
-  description: "Map viewer sel BTS (OpenCellID) dan menara (OSM) Indonesia",
+  title: "Jejaringnusa | Peta Infrastruktur Seluler",
+  description: "Peta infrastruktur jaringan seluler Indonesia, mencakup lokasi BTS, menara, kabel laut, dan jaringan fiber.",
+  icons: {
+    icon: "/Jejaringnusa_removebg.png",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
