@@ -184,7 +184,7 @@ function RailBtn({ active, label, badge, onClick, icon }: {
   return (
     <button
       onClick={onClick} aria-label={label} aria-pressed={active}
-      className={`group relative grid h-10 w-10 place-items-center rounded-xl transition ${focusRing} ${
+      className={`group relative grid h-10 w-10 flex-1 place-items-center rounded-xl transition md:flex-none ${focusRing} ${
         active ? "bg-sky-500/20 text-sky-700" : "text-slate-600 hover:bg-slate-900/5 hover:text-slate-900"
       }`}
     >
@@ -201,12 +201,12 @@ function QuickToggle({ on, onClick, swatch, label }: { on: boolean; onClick: () 
   return (
     <button
       onClick={onClick} aria-pressed={on} title={label}
-      className={`flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition ${focusRing} ${
+      className={`flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg px-1 py-1.5 text-[10px] transition sm:gap-1.5 sm:px-2.5 sm:text-xs lg:flex-none lg:shrink-0 ${focusRing} ${
         on ? "bg-slate-900/10 text-slate-900" : "text-slate-500 hover:bg-slate-900/5 hover:text-slate-700"
       }`}
     >
       <span className={on ? "" : "opacity-40"}>{swatch}</span>
-      <span>{label}</span>
+      <span className="truncate">{label}</span>
     </button>
   );
 }
@@ -342,7 +342,8 @@ export default function Dashboard() {
     } catch { /* abaikan */ }
     return { x: 0, y: 0 };
   });
-  const legendDrag = useRef<{ sx: number; sy: number; ox: number; oy: number; min: [number, number]; max: [number, number] } | null>(null);
+  const legendDrag = useRef<{ sx: number; sy: number; ox: number; oy: number; min: [number, number]; max: [number, number]; moved: boolean } | null>(null);
+  const suppressLegendClick = useRef(false);
   const [cablesIndex, setCablesIndex] = useState<{ id: string; name: string; center: [number, number]; rfs_year?: number | null; is_planned?: boolean }[]>([]);
   const [q, setQ] = useState("");
   const [searchFocus, setSearchFocus] = useState(false);
@@ -405,20 +406,27 @@ export default function Dashboard() {
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
       if (e.button !== 0) return;
       const l = legendLimits(legendPos); if (!l) return;
+      suppressLegendClick.current = false;
       e.currentTarget.setPointerCapture(e.pointerId);
-      legendDrag.current = { sx: e.clientX, sy: e.clientY, ox: legendPos.x, oy: legendPos.y, ...l };
+      legendDrag.current = { sx: e.clientX, sy: e.clientY, ox: legendPos.x, oy: legendPos.y, ...l, moved: false };
     },
     onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
       const d = legendDrag.current; if (!d) return;
+      if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 4) return;
+      d.moved = true;
       setLegendPos({
         x: Math.min(d.max[0], Math.max(d.min[0], d.ox + e.clientX - d.sx)),
         y: Math.min(d.max[1], Math.max(d.min[1], d.oy + e.clientY - d.sy)),
       });
     },
-    onPointerUp: () => { if (legendDrag.current) { legendDrag.current = null; saveLegend(legendPos); } },
-    onPointerCancel: () => { legendDrag.current = null; },
+    onPointerUp: () => {
+      if (!legendDrag.current) return;
+      suppressLegendClick.current = legendDrag.current.moved;
+      legendDrag.current = null;
+      saveLegend(legendPos);
+    },
+    onPointerCancel: () => { legendDrag.current = null; suppressLegendClick.current = false; },
   };
-  const moveLegendBy = (dx: number, dy: number) => { const p = clampLegend({ x: legendPos.x + dx, y: legendPos.y + dy }, legendPos); setLegendPos(p); saveLegend(p); };
   const resetLegend = () => { setLegendPos({ x: 0, y: 0 }); saveLegend({ x: 0, y: 0 }); };
 
   // Pintasan keyboard: [ buka/tutup panel, / fokus ke pencarian, Esc tutup
@@ -624,6 +632,15 @@ export default function Dashboard() {
   const samplesDirty = minSamples !== 1;
   const dirty = opsDirty || radiosDirty || samplesDirty || !!region;
   const resetFilters = () => { setOps(new Set(knownOps)); setRadios(new Set(allRadios)); setMinSamples(1); setRegion(null); };
+  const goToIndonesia = () => {
+    setRegion(null);
+    setPin(null);
+    setQ("");
+    setSearchFocus(false);
+    topGeo.reset();
+    setView({ ...PRESETS[0], n: view.n + 1 });
+    setTab(null);
+  };
   const kpi: [string, string, string?][] = [
     ["Sel lolos filter", fmt(calc.idx.length), region ? `dari ${fmt(calc.scopeTotal)} sel di ${region.label}` : `dari ${fmt(calc.total)} sel`],
     ["Menara OSM", fmt(data.towers.features.length)],
@@ -649,14 +666,25 @@ export default function Dashboard() {
         }`}
       >
         <div className="flex flex-col gap-1.5 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between lg:gap-2">
-          <div className={`pointer-events-auto flex w-fit shrink-0 items-center gap-2 rounded-xl px-2.5 py-1.5 ${glass}`}>
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-50 ring-1 ring-slate-900/5">
-              <Image src="/Jejaringnusa_removebg.png" alt="" width={32} height={32} className="h-8 w-8 object-contain" />
-            </span>
-            <div className="leading-tight">
-              <p className="text-[11px] font-bold tracking-[0.12em] text-slate-900">JEJARINGNUSA</p>
-              <p className="mt-0.5 text-[10px] font-medium text-slate-500">Peta Infrastruktur Seluler</p>
+          <div className={`pointer-events-auto flex w-full shrink-0 items-center justify-between rounded-xl px-2.5 py-1.5 ${glass} lg:w-fit lg:justify-start`}>
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-50 ring-1 ring-slate-900/5">
+                <Image src="/Jejaringnusa_removebg.png" alt="" width={32} height={32} className="h-8 w-8 object-contain" />
+              </span>
+              <div className="min-w-0 leading-tight">
+                <p className="truncate text-[11px] font-bold tracking-[0.12em] text-slate-900">JEJARINGNUSA</p>
+                <p className="mt-0.5 truncate text-[10px] font-medium text-slate-500">Peta Infrastruktur Seluler</p>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={goToIndonesia}
+              title="Kembali ke tampilan Indonesia"
+              aria-label="Kembali ke tampilan Indonesia"
+              className={`ml-3 shrink-0 rounded-full bg-slate-900/[0.04] px-2 py-1 text-[9px] font-semibold tracking-wide text-slate-500 transition hover:bg-sky-500/10 hover:text-sky-700 ${focusRing} lg:hidden`}
+            >
+              INDONESIA
+            </button>
           </div>
 
           <div className="flex w-full min-w-0 flex-col gap-1.5 lg:w-auto lg:flex-row lg:items-start lg:gap-2">
@@ -695,7 +723,7 @@ export default function Dashboard() {
               )}
             </div>
 
-            <div className={`pointer-events-auto flex w-full min-w-0 gap-0.5 overflow-x-auto rounded-xl p-0.5 [scrollbar-width:none] md:w-auto md:p-1 ${glass}`} role="group" aria-label="Layer cepat">
+            <div className={`pointer-events-auto flex w-full min-w-0 gap-0.5 overflow-hidden rounded-xl p-0.5 md:w-auto md:overflow-x-auto md:p-1 ${glass}`} role="group" aria-label="Layer cepat">
               {quick.map(([k, label, sw]) => (
                 <QuickToggle key={k} on={show[k]} onClick={() => setShow({ ...show, [k]: !show[k] })} swatch={sw} label={label} />
               ))}
@@ -1057,7 +1085,7 @@ export default function Dashboard() {
       {/* === Desktop legend (>= md) === */}
       <div ref={legendRef} style={{ transform: `translate(${legendPos.x}px, ${legendPos.y}px)` }} className="absolute bottom-14 right-3 z-10 hidden md:block">
         {legendOpen && (
-          <div {...dragProps} title="Seret untuk memindahkan" className={`mb-2 w-52 cursor-grab touch-none select-none space-y-2.5 rounded-xl p-3 text-[11px] text-slate-700 active:cursor-grabbing ${glass}`}>
+          <div className={`mb-2 w-52 space-y-2.5 rounded-xl p-3 text-[11px] text-slate-700 ${glass}`}>
             <div>
               <div className="mb-1 text-slate-500">Sel BTS per operator</div>
               <div className="grid grid-cols-2 gap-x-2 gap-y-1">
@@ -1077,26 +1105,25 @@ export default function Dashboard() {
             </div>
           </div>
         )}
-        <div className="flex justify-end gap-1">
-          <span
-            role="button" tabIndex={0} {...dragProps} onDoubleClick={resetLegend}
-            onKeyDown={(e) => {
-              const k: Record<string, [number, number]> = { ArrowLeft: [-12, 0], ArrowRight: [12, 0], ArrowUp: [0, -12], ArrowDown: [0, 12] };
-              if (k[e.key]) { e.preventDefault(); moveLegendBy(...k[e.key]); } else if (e.key === "Home") resetLegend();
-            }}
-            title="Seret untuk memindahkan · klik dua kali untuk mengembalikan" aria-label="Geser legenda (tombol panah; Home untuk mengembalikan)"
-            className={`grid w-6 cursor-grab touch-none place-items-center rounded-lg text-slate-500 hover:text-slate-800 active:cursor-grabbing ${glass} ${focusRing}`}
-          >
-            <Icon name="grip" size={14} />
-          </span>
-          <button
-            onClick={() => setLegendOpen(!legendOpen)} aria-expanded={legendOpen}
-            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-800 hover:bg-slate-100 ${glass} ${focusRing}`}
-          >
-            Legenda
-            <span className={`transition ${legendOpen ? "" : "rotate-180"}`}><Icon name="chevron" size={10} /></span>
-          </button>
-        </div>
+        <button
+          {...dragProps}
+          onClick={() => {
+            if (suppressLegendClick.current) {
+              suppressLegendClick.current = false;
+              return;
+            }
+            setLegendOpen(!legendOpen);
+          }}
+          onDoubleClick={resetLegend}
+          onKeyDown={(e) => { if (e.key === "Home") resetLegend(); }}
+          title="Seret untuk memindahkan · klik untuk membuka/tutup · klik dua kali untuk mengembalikan"
+          aria-label="Legenda. Seret untuk memindahkan, klik untuk membuka atau menutup, klik dua kali untuk mengembalikan posisi"
+          aria-expanded={legendOpen}
+          className={`flex cursor-grab touch-none select-none items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-800 hover:bg-slate-100 active:cursor-grabbing ${glass} ${focusRing}`}
+        >
+          Legenda
+          <span className={`transition ${legendOpen ? "" : "rotate-180"}`}><Icon name="chevron" size={10} /></span>
+        </button>
       </div>
 
       <div className="pointer-events-none absolute bottom-7 left-[60px] z-10 hidden max-w-xs rounded-lg bg-white/90 px-3 py-1.5 shadow-lg backdrop-blur md:block">
@@ -1121,7 +1148,7 @@ export default function Dashboard() {
         </div>
       <nav
         aria-label="Menu utama"
-        className={`flex justify-around gap-1 px-2 py-1 md:absolute md:left-3 md:top-3 md:z-20 md:flex-col md:justify-start md:rounded-2xl md:p-1 md:border md:border-slate-900/10 md:bg-white/90 md:shadow-xl md:backdrop-blur`}
+        className={`flex items-center gap-1 px-2 py-1 md:absolute md:left-3 md:top-3 md:z-20 md:flex-col md:justify-start md:rounded-2xl md:p-1 md:border md:border-slate-900/10 md:bg-white/90 md:shadow-xl md:backdrop-blur`}
       >
         <RailBtn icon="layers" label="Layer & peta dasar" active={tab === "layers"} onClick={() => openTab("layers")} />
         <RailBtn icon="filter" label="Filter data" active={tab === "filter"} badge={dirty} onClick={() => openTab("filter")} />
