@@ -334,6 +334,7 @@ export default function Dashboard() {
   const [legendOpen, setLegendOpen] = useState(false);
   // Legenda bisa digeser: offset (px) dari posisi bawaan, dibatasi agar tetap di dalam peta
   const legendRef = useRef<HTMLDivElement>(null);
+  const mobileLegendRef = useRef<HTMLDivElement>(null);
   const [legendPos, setLegendPos] = useState<{ x: number; y: number }>(() => {
     if (typeof window === "undefined") return { x: 0, y: 0 };
     try {
@@ -342,7 +343,15 @@ export default function Dashboard() {
     } catch { /* abaikan */ }
     return { x: 0, y: 0 };
   });
-  const legendDrag = useRef<{ sx: number; sy: number; ox: number; oy: number; min: [number, number]; max: [number, number]; moved: boolean } | null>(null);
+  const [mobileLegendPos, setMobileLegendPos] = useState<{ x: number; y: number }>(() => {
+    if (typeof window === "undefined") return { x: 0, y: 0 };
+    try {
+      const v = JSON.parse(localStorage.getItem("mobile-legend-pos") ?? "null");
+      if (v && Number.isFinite(v.x) && Number.isFinite(v.y)) return v;
+    } catch { /* abaikan */ }
+    return { x: 0, y: 0 };
+  });
+  const legendDrag = useRef<{ sx: number; sy: number; ox: number; oy: number; min: [number, number]; max: [number, number]; moved: boolean; mobile: boolean } | null>(null);
   const suppressLegendClick = useRef(false);
   const [cablesIndex, setCablesIndex] = useState<{ id: string; name: string; center: [number, number]; rfs_year?: number | null; is_planned?: boolean }[]>([]);
   const [q, setQ] = useState("");
@@ -357,21 +366,28 @@ export default function Dashboard() {
   };
 
   // Batas geser legenda = area peta dikurangi margin 8px (posisi dasar = posisi sekarang dikurangi offset)
-  const legendLimits = (cur: { x: number; y: number }) => {
-    const el = legendRef.current, host = el?.offsetParent as HTMLElement | null;
+  const legendLimits = (cur: { x: number; y: number }, el = legendRef.current) => {
+    const host = el?.offsetParent as HTMLElement | null;
     if (!el || !host) return null;
     const r = el.getBoundingClientRect(), h = host.getBoundingClientRect(), bx = r.left - cur.x, by = r.top - cur.y;
     return { min: [h.left + 8 - bx, h.top + 8 - by] as [number, number], max: [h.right - 8 - (bx + r.width), h.bottom - 8 - (by + r.height)] as [number, number] };
   };
-  const clampLegend = (p: { x: number; y: number }, cur = p) => {
-    const l = legendLimits(cur);
+  const clampLegend = (p: { x: number; y: number }, cur = p, el = legendRef.current) => {
+    const l = legendLimits(cur, el);
     return l ? { x: Math.min(l.max[0], Math.max(l.min[0], p.x)), y: Math.min(l.max[1], Math.max(l.min[1], p.y)) } : p;
   };
-  const saveLegend = (p: { x: number; y: number }) => { try { localStorage.setItem("legend-pos", JSON.stringify(p)); } catch { /* abaikan */ } };
+  const saveLegend = (p: { x: number; y: number }, mobile = false) => {
+    try { localStorage.setItem(mobile ? "mobile-legend-pos" : "legend-pos", JSON.stringify(p)); } catch { /* abaikan */ }
+  };
   useEffect(() => {
     const onResize = () => setLegendPos((p) => clampLegend(p));
+    const onMobileResize = () => setMobileLegendPos((p) => clampLegend(p, p, mobileLegendRef.current));
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.addEventListener("resize", onMobileResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("resize", onMobileResize);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -402,32 +418,78 @@ export default function Dashboard() {
       })
       .catch(() => { /* abaikan jika gagal/offline */ });
   }, []);
-  const dragProps = {
+  const mobileLegendDragProps = {
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
       if (e.button !== 0) return;
-      const l = legendLimits(legendPos); if (!l) return;
+      const limits = legendLimits(mobileLegendPos, mobileLegendRef.current);
+      if (!limits) return;
       suppressLegendClick.current = false;
       e.currentTarget.setPointerCapture(e.pointerId);
-      legendDrag.current = { sx: e.clientX, sy: e.clientY, ox: legendPos.x, oy: legendPos.y, ...l, moved: false };
+      legendDrag.current = { sx: e.clientX, sy: e.clientY, ox: mobileLegendPos.x, oy: mobileLegendPos.y, ...limits, moved: false, mobile: true };
     },
     onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
-      const d = legendDrag.current; if (!d) return;
-      if (!d.moved && Math.hypot(e.clientX - d.sx, e.clientY - d.sy) < 4) return;
-      d.moved = true;
-      setLegendPos({
-        x: Math.min(d.max[0], Math.max(d.min[0], d.ox + e.clientX - d.sx)),
-        y: Math.min(d.max[1], Math.max(d.min[1], d.oy + e.clientY - d.sy)),
+      const drag = legendDrag.current;
+      if (!drag) return;
+      if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return;
+      drag.moved = true;
+      setMobileLegendPos({
+        x: Math.min(drag.max[0], Math.max(drag.min[0], drag.ox + e.clientX - drag.sx)),
+        y: Math.min(drag.max[1], Math.max(drag.min[1], drag.oy + e.clientY - drag.sy)),
       });
     },
-    onPointerUp: () => {
-      if (!legendDrag.current) return;
-      suppressLegendClick.current = legendDrag.current.moved;
+    onPointerUp: (e: React.PointerEvent<HTMLElement>) => {
+      const drag = legendDrag.current;
+      if (!drag) return;
+      suppressLegendClick.current = drag.moved;
       legendDrag.current = null;
-      saveLegend(legendPos);
+      const position = drag.moved ? {
+        x: Math.min(drag.max[0], Math.max(drag.min[0], drag.ox + e.clientX - drag.sx)),
+        y: Math.min(drag.max[1], Math.max(drag.min[1], drag.oy + e.clientY - drag.sy)),
+      } : { x: drag.ox, y: drag.oy };
+      setMobileLegendPos(position);
+      saveLegend(position, true);
     },
     onPointerCancel: () => { legendDrag.current = null; suppressLegendClick.current = false; },
   };
-  const resetLegend = () => { setLegendPos({ x: 0, y: 0 }); saveLegend({ x: 0, y: 0 }); };
+  const desktopLegendDragProps = {
+    onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
+      if (e.button !== 0) return;
+      const limits = legendLimits(legendPos, legendRef.current);
+      if (!limits) return;
+      suppressLegendClick.current = false;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      legendDrag.current = { sx: e.clientX, sy: e.clientY, ox: legendPos.x, oy: legendPos.y, ...limits, moved: false, mobile: false };
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
+      const drag = legendDrag.current;
+      if (!drag) return;
+      if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return;
+      drag.moved = true;
+      setLegendPos({
+        x: Math.min(drag.max[0], Math.max(drag.min[0], drag.ox + e.clientX - drag.sx)),
+        y: Math.min(drag.max[1], Math.max(drag.min[1], drag.oy + e.clientY - drag.sy)),
+      });
+    },
+    onPointerUp: (e: React.PointerEvent<HTMLElement>) => {
+      const drag = legendDrag.current;
+      if (!drag) return;
+      suppressLegendClick.current = drag.moved;
+      legendDrag.current = null;
+      const position = drag.moved ? {
+        x: Math.min(drag.max[0], Math.max(drag.min[0], drag.ox + e.clientX - drag.sx)),
+        y: Math.min(drag.max[1], Math.max(drag.min[1], drag.oy + e.clientY - drag.sy)),
+      } : { x: drag.ox, y: drag.oy };
+      setLegendPos(position);
+      saveLegend(position);
+    },
+    onPointerCancel: () => { legendDrag.current = null; suppressLegendClick.current = false; },
+  };
+  const resetLegend = (mobile = false) => {
+    const position = { x: 0, y: 0 };
+    if (mobile) setMobileLegendPos(position);
+    else setLegendPos(position);
+    saveLegend(position, mobile);
+  };
 
   // Pintasan keyboard: [ buka/tutup panel, / fokus ke pencarian, Esc tutup
   useEffect(() => {
@@ -1051,7 +1113,11 @@ export default function Dashboard() {
       {/* Legenda ringkas — mobile: bottom-sheet di atas nav; desktop: floating draggable */}
 
       {/* === Mobile legend (< md): popover kecil di kanan-bawah area peta; skala ada di kiri-bawah === */}
-      <div className="absolute bottom-10 right-2 z-10 flex flex-col items-end gap-1.5 md:hidden">
+      <div
+        ref={mobileLegendRef}
+        style={{ transform: `translate(${mobileLegendPos.x}px, ${mobileLegendPos.y}px)` }}
+        className="absolute bottom-10 right-2 z-10 flex flex-col items-end gap-1.5 md:hidden"
+      >
         {legendOpen && (
           <div className={`w-52 max-w-[calc(100vw-1rem)] space-y-2 rounded-xl p-2.5 text-[11px] text-slate-700 ${glass}`}>
             <div>
@@ -1074,8 +1140,20 @@ export default function Dashboard() {
           </div>
         )}
         <button
-          onClick={() => setLegendOpen(!legendOpen)} aria-expanded={legendOpen}
-          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-800 ${glass} ${focusRing}`}
+          {...mobileLegendDragProps}
+          onClick={() => {
+            if (suppressLegendClick.current) {
+              suppressLegendClick.current = false;
+              return;
+            }
+            setLegendOpen(!legendOpen);
+          }}
+          onDoubleClick={() => resetLegend(true)}
+          onKeyDown={(e) => { if (e.key === "Home") resetLegend(true); }}
+          title="Seret untuk memindahkan · klik untuk membuka/tutup · klik dua kali untuk mengembalikan"
+          aria-label="Legenda. Seret untuk memindahkan, klik untuk membuka atau menutup, klik dua kali untuk mengembalikan posisi"
+          aria-expanded={legendOpen}
+          className={`flex cursor-grab touch-none select-none items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-800 active:cursor-grabbing ${glass} ${focusRing}`}
         >
           Legenda
           <span className={`transition ${legendOpen ? "" : "rotate-180"}`}><Icon name="chevron" size={10} /></span>
@@ -1106,7 +1184,7 @@ export default function Dashboard() {
           </div>
         )}
         <button
-          {...dragProps}
+          {...desktopLegendDragProps}
           onClick={() => {
             if (suppressLegendClick.current) {
               suppressLegendClick.current = false;
@@ -1114,7 +1192,7 @@ export default function Dashboard() {
             }
             setLegendOpen(!legendOpen);
           }}
-          onDoubleClick={resetLegend}
+          onDoubleClick={() => resetLegend()}
           onKeyDown={(e) => { if (e.key === "Home") resetLegend(); }}
           title="Seret untuk memindahkan · klik untuk membuka/tutup · klik dua kali untuk mengembalikan"
           aria-label="Legenda. Seret untuk memindahkan, klik untuk membuka atau menutup, klik dua kali untuk mengembalikan posisi"
