@@ -20,7 +20,7 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 ## SEO and deployment
 
-Set `NEXT_PUBLIC_SITE_URL` to the site's public origin before building (for example, `https://jejaringnusa.com`). This value is used to generate canonical and Open Graph URLs, `sitemap.xml`, and the sitemap reference in `robots.txt`. If unset, a Vercel deployment URL is used when available; local builds default to `http://localhost:3000`.
+The production site URL is `https://jejaringnusa.my.id`. Set `NEXT_PUBLIC_SITE_URL` to a different public origin before building only if needed. This value is used to generate canonical and Open Graph URLs, `sitemap.xml`, and the sitemap reference in `robots.txt`. If unset, a Vercel deployment URL is used when available; otherwise the production domain is used.
 
 With the static export, the generated files are available at `/sitemap.xml` and `/robots.txt`.
 
