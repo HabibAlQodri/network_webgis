@@ -18,6 +18,12 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## SEO and deployment
+
+Set `NEXT_PUBLIC_SITE_URL` to the site's public origin before building (for example, `https://jejaringnusa.com`). This value is used to generate canonical and Open Graph URLs, `sitemap.xml`, and the sitemap reference in `robots.txt`. If unset, a Vercel deployment URL is used when available; local builds default to `http://localhost:3000`.
+
+With the static export, the generated files are available at `/sitemap.xml` and `/robots.txt`.
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More
