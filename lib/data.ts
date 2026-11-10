@@ -12,7 +12,7 @@ export type Dataset = {
 
 export type LoadStep = "cells" | "towers";
 
-/** Error pemuatan data: `userMessage` ramah untuk pengguna, `detail` teknis untuk debugging. */
+/** Data loading error: `userMessage` is user-friendly; `detail` is for debugging. */
 export class DataLoadError extends Error {
   userMessage: string;
   detail: string;
@@ -24,7 +24,7 @@ export class DataLoadError extends Error {
   }
 }
 
-/** True bila error berasal dari AbortController (pemuatan dibatalkan, bukan gagal). */
+/** True when an error comes from AbortController (loading was cancelled, not failed). */
 export function isAbortError(e: unknown): boolean {
   return !!e && typeof e === "object" && (e as { name?: string }).name === "AbortError";
 }
@@ -38,53 +38,53 @@ const validLonLat = (lon: number, lat: number) => lon >= -180 && lon <= 180 && l
 
 /** Pastikan semua field wajib berupa array angka dengan panjang sama, radio dalam rentang, dan koordinat valid. */
 export function validateCells(d: unknown): asserts d is CellData {
-  const USER = "Berkas data sel BTS rusak atau formatnya tidak valid.";
+  const USER = "Cell site data is corrupted or has an invalid format.";
   const bad = (detail: string) => new DataLoadError(USER, `cells.json: ${detail}`);
-  if (!d || typeof d !== "object" || Array.isArray(d)) throw bad("isi berkas bukan objek");
+  if (!d || typeof d !== "object" || Array.isArray(d)) throw bad("file contents are not an object");
   const o = d as Record<string, unknown>;
 
   // 1) struktur & panjang array
   let n = -1;
   for (const f of CELL_FIELDS) {
     const a = o[f];
-    if (!Array.isArray(a)) throw bad(`field \`${f}\` hilang atau bukan array`);
+    if (!Array.isArray(a)) throw bad(`field \`${f}\` is missing or is not an array`);
     if (n === -1) n = a.length;
-    else if (a.length !== n) throw bad(`panjang \`${f}\` (${a.length}) berbeda dari \`${CELL_FIELDS[0]}\` (${n})`);
+    else if (a.length !== n) throw bad(`length of \`${f}\` (${a.length}) differs from \`${CELL_FIELDS[0]}\` (${n})`);
   }
-  if (n === 0) throw bad("tidak ada sel (array kosong)");
+  if (n === 0) throw bad("no cell sites (empty array)");
 
   // 2) nilai tiap elemen
   for (const f of CELL_FIELDS) {
     const a = o[f] as unknown[];
     for (let i = 0; i < n; i++) {
-      if (!isNum(a[i])) throw bad(`\`${f}[${i}]\` bukan angka valid (${JSON.stringify(a[i])})`);
+      if (!isNum(a[i])) throw bad(`\`${f}[${i}]\` is not a valid number (${JSON.stringify(a[i])})`);
     }
   }
   const { radio, lon, lat } = o as { radio: number[]; lon: number[]; lat: number[] };
   for (let i = 0; i < n; i++) {
-    if (!Number.isInteger(radio[i]) || radio[i] < 0 || radio[i] >= RADIO_COUNT) throw bad(`\`radio[${i}]\` = ${radio[i]} di luar rentang 0–${RADIO_COUNT - 1}`);
-    if (!validLonLat(lon[i], lat[i])) throw bad(`koordinat sel ke-${i} di luar rentang (lon=${lon[i]}, lat=${lat[i]})`);
+    if (!Number.isInteger(radio[i]) || radio[i] < 0 || radio[i] >= RADIO_COUNT) throw bad(`\`radio[${i}]\` = ${radio[i]} is outside the range 0–${RADIO_COUNT - 1}`);
+    if (!validLonLat(lon[i], lat[i])) throw bad(`coordinates for cell site ${i} are out of range (lon=${lon[i]}, lat=${lat[i]})`);
   }
 }
 
 /** Pastikan FeatureCollection valid dan tiap fitur berupa Point dengan koordinat yang dapat dipakai peta. */
 export function validateTowers(d: unknown): asserts d is FeatureCollection {
-  const USER = "Berkas data menara rusak atau formatnya tidak valid.";
+  const USER = "Tower data is corrupted or has an invalid format.";
   const bad = (detail: string) => new DataLoadError(USER, `towers.geojson: ${detail}`);
-  if (!d || typeof d !== "object" || Array.isArray(d)) throw bad("isi berkas bukan objek");
+  if (!d || typeof d !== "object" || Array.isArray(d)) throw bad("file contents are not an object");
   const o = d as { type?: unknown; features?: unknown };
-  if (o.type !== "FeatureCollection") throw bad(`type harus "FeatureCollection", ditemukan ${JSON.stringify(o.type)}`);
-  if (!Array.isArray(o.features)) throw bad("`features` hilang atau bukan array");
+  if (o.type !== "FeatureCollection") throw bad(`type must be "FeatureCollection"; found ${JSON.stringify(o.type)}`);
+  if (!Array.isArray(o.features)) throw bad("`features` is missing or is not an array");
 
   for (let i = 0; i < o.features.length; i++) {
     const f = o.features[i] as { type?: unknown; geometry?: { type?: unknown; coordinates?: unknown } | null } | null;
-    if (!f || typeof f !== "object" || f.type !== "Feature") throw bad(`features[${i}] bukan Feature`);
+    if (!f || typeof f !== "object" || f.type !== "Feature") throw bad(`features[${i}] is not a Feature`);
     const g = f.geometry;
-    if (!g || typeof g !== "object") throw bad(`features[${i}] tidak punya geometri`);
-    if (g.type !== "Point") throw bad(`features[${i}] bertipe geometri ${JSON.stringify(g.type)}, diharapkan "Point"`);
+    if (!g || typeof g !== "object") throw bad(`features[${i}] has no geometry`);
+    if (g.type !== "Point") throw bad(`features[${i}] has geometry type ${JSON.stringify(g.type)}; expected "Point"`);
     const c = g.coordinates;
-    if (!Array.isArray(c) || c.length < 2 || !isNum(c[0]) || !isNum(c[1])) throw bad(`features[${i}] koordinat tidak valid (${JSON.stringify(c)})`);
-    if (!validLonLat(c[0], c[1])) throw bad(`features[${i}] koordinat di luar rentang (lon=${c[0]}, lat=${c[1]})`);
+    if (!Array.isArray(c) || c.length < 2 || !isNum(c[0]) || !isNum(c[1])) throw bad(`features[${i}] has invalid coordinates (${JSON.stringify(c)})`);
+    if (!validLonLat(c[0], c[1])) throw bad(`features[${i}] coordinates are out of range (lon=${c[0]}, lat=${c[1]})`);
   }
 }
 
@@ -97,15 +97,15 @@ async function fetchJson<T>(url: string, label: string, signal?: AbortSignal): P
   } catch (e) {
     if (isAbortError(e)) throw e;
     throw new DataLoadError(
-      `Tidak dapat menghubungi server saat memuat ${label}. Periksa koneksi internet Anda.`,
+      `Could not connect to the server while loading ${label}. Check your internet connection.`,
       `Network error: GET ${url} (${e instanceof Error ? e.message : String(e)})`,
     );
   }
   if (!res.ok) {
     const userMessage =
-      res.status === 404 ? `Berkas ${label} tidak ditemukan di server.`
-      : res.status >= 500 ? `Server sedang bermasalah saat memuat ${label}. Coba lagi beberapa saat lagi.`
-      : `${label[0].toUpperCase() + label.slice(1)} gagal dimuat (kode ${res.status}).`;
+      res.status === 404 ? `The ${label} file was not found on the server.`
+      : res.status >= 500 ? `The server encountered a problem while loading ${label}. Please try again later.`
+      : `${label[0].toUpperCase() + label.slice(1)} failed to load (status ${res.status}).`;
     throw new DataLoadError(userMessage, `HTTP ${res.status} ${res.statusText}: GET ${url}`);
   }
   try {
@@ -113,7 +113,7 @@ async function fetchJson<T>(url: string, label: string, signal?: AbortSignal): P
   } catch (e) {
     if (isAbortError(e)) throw e;
     throw new DataLoadError(
-      `Berkas ${label} rusak atau formatnya tidak valid.`,
+      `The ${label} file is corrupted or has an invalid format.`,
       `Invalid JSON: GET ${url} (${e instanceof Error ? e.message : String(e)})`,
     );
   }
@@ -133,12 +133,12 @@ export async function loadDataset({ signal, onStep }: LoadOptions = {}): Promise
   if (signal?.aborted) ctrl.abort(); else signal?.addEventListener("abort", forward, { once: true });
   try {
     const [cells, towers] = await Promise.all([
-      fetchJson<unknown>("/data/cells.json", "data sel BTS", ctrl.signal).then((d) => {
+      fetchJson<unknown>("/data/cells.json", "cell site data", ctrl.signal).then((d) => {
         validateCells(d);
         onStep?.("cells");
         return d;
       }),
-      fetchJson<unknown>("/data/towers.geojson", "data menara", ctrl.signal).then((d) => {
+      fetchJson<unknown>("/data/towers.geojson", "tower data", ctrl.signal).then((d) => {
         validateTowers(d);
         onStep?.("towers");
         return d;

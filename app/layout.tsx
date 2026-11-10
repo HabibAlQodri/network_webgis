@@ -6,8 +6,8 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Jejaringnusa | Peta Infrastruktur Seluler",
-  description: "Peta infrastruktur jaringan seluler Indonesia, mencakup lokasi BTS, menara, kabel laut, dan jaringan fiber.",
+  title: "Jejaringnusa | Mobile Network Infrastructure Map",
+  description: "A map of Indonesia's mobile network infrastructure, including cell sites, towers, submarine cables, and fiber networks.",
   icons: {
     icon: "/Jejaringnusa_removebg.png",
   },
@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="id" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

@@ -4,21 +4,28 @@ import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { OPERATORS, OTHER_COLOR, PRESETS, RADIOS, RADIO_COLORS, REGIONS, type Preset } from "@/lib/config";
 import { DataLoadError, isAbortError, loadDataset, type Dataset, type LoadStep } from "@/lib/data";
-import { cellsToCSV, cellsToExportGeoJSON, download, exportFilename } from "@/lib/export";
+import { cellsToCSV, cellsToExportGeoJSON, download, downloadCanvasAsPNG, exportFilename } from "@/lib/export";
 import { cellsInRegion, parseCoordinate, placeToRegion, type PlaceResult, type RegionFilter } from "@/lib/region";
+import { formatNumber, localizeDataMessage, text, useLocale, type Locale } from "@/lib/locale";
 import { inBBox, type BBox } from "@/lib/spatial";
 import { compareOperators, OTHER_OPERATOR, type OperatorStat } from "@/lib/stats";
 import type { Basemap, CellFilter, Viewport } from "./MapView";
+import type { Map as MLMap } from "maplibre-gl";
 import { useGeocoder, type GeocodeState } from "./useGeocoder";
+
+function MapLoading() {
+  const locale = useLocale();
+  return <div className="grid h-full place-items-center text-sm text-slate-500">{text(locale, "Preparing map…", "Menyiapkan peta…")}</div>;
+}
 
 const MapView = dynamic(() => import("./MapView"), {
   ssr: false,
-  loading: () => <div className="grid h-full place-items-center text-sm text-slate-500">Menyiapkan peta…</div>,
+  loading: MapLoading,
 });
-const fmt = (n: number) => n.toLocaleString("id-ID");
 const KNOWN_OPS = Object.keys(OPERATORS).map(Number);
 const KNOWN_SET: ReadonlySet<number> = new Set(KNOWN_OPS);
-const opName = (mnc: number) => (mnc === OTHER_OPERATOR ? "Lainnya" : OPERATORS[mnc]?.name ?? `MNC ${mnc}`);
+const fmt = (n: number, locale: Locale) => formatNumber(n, locale);
+const opName = (mnc: number, locale: Locale) => (mnc === OTHER_OPERATOR ? text(locale, "Other", "Lainnya") : OPERATORS[mnc]?.name ?? `MNC ${mnc}`);
 
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
@@ -26,19 +33,41 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 const focusRing = "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400";
-// Lokasi terdekat dari titik tengah peta (offline, dari daftar PRESETS)
-const CITIES = PRESETS.filter((p) => p.region !== "Nasional");
+// Nearest location to the map center (offline, from PRESETS)
+const CITIES = PRESETS.filter((p) => p.region !== "National");
 function distKm(a: [number, number], b: [number, number]) {
   const r = Math.PI / 180, dLat = (b[1] - a[1]) * r, dLon = (b[0] - a[0]) * r;
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * r) * Math.cos(b[1] * r) * Math.sin(dLon / 2) ** 2;
   return 12742 * Math.asin(Math.sqrt(h));
 }
-function describePlace(center?: [number, number], zoom?: number): { name: string; sub: string } {
-  if (!center || zoom === undefined || zoom < 5.5) return { name: "Indonesia", sub: "Tampilan nasional" };
+function describePlace(center: [number, number] | undefined, zoom: number | undefined, locale: Locale): { name: string; sub: string } {
+  if (!center || zoom === undefined || zoom < 5.5) return { name: "Indonesia", sub: text(locale, "National view", "Tampilan nasional") };
   let best: Preset = CITIES[0], bd = Infinity;
   for (const c of CITIES) { const d = distKm(center, c.center); if (d < bd) { bd = d; best = c; } }
-  if (bd < 40) return { name: best.label, sub: best.province };
-  return { name: `Dekat ${best.label}`, sub: `${best.province} · ±${fmt(Math.round(bd))} km` };
+  if (bd < 40) return { name: best.label, sub: localizedPresetName(best.province, locale) };
+  return locale === "id"
+    ? { name: `Dekat ${best.label}`, sub: `${localizedPresetName(best.province, locale)} · ±${fmt(Math.round(bd), locale)} km` }
+    : { name: `Near ${best.label}`, sub: `${best.province} · ~${fmt(Math.round(bd), locale)} km` };
+}
+
+function localizedPresetName(value: string, locale: Locale): string {
+  if (locale !== "id") return value;
+  const names: Record<string, string> = {
+    National: "Nasional", "Entire archipelago": "Seluruh nusantara", Java: "Jawa",
+    "Jakarta, Banten, West Java": "DKI Jakarta, Banten, Jawa Barat", "West Java": "Jawa Barat",
+    "Central Java": "Jawa Tengah", "East Java": "Jawa Timur",
+    "Map view": "Tampilan peta", Rectangle: "Persegi",
+  };
+  return names[value] ?? value;
+}
+
+function localizedAreaKind(value: string, locale: Locale): string {
+  const kinds: Record<string, string> = {
+    Rectangle: "Persegi", Province: "Provinsi", Regency: "Kabupaten", City: "Kota",
+    District: "Kecamatan", Suburb: "Kelurahan", Village: "Desa", Island: "Pulau",
+    Town: "Kota", Region: "Wilayah", Area: "Wilayah", Location: "Lokasi",
+  };
+  return locale === "id" ? kinds[value] ?? value : value;
 }
 
 const glass = "border border-slate-900/10 bg-white/90 shadow-xl backdrop-blur";
@@ -141,15 +170,15 @@ const Legend = ({ c, children }: { c: string; children: React.ReactNode }) => (
   <span className="flex items-center gap-1.5"><Line c={c} />{children}</span>
 );
 
-function FilterRow({ on, onClick, color, label, value, max, fixed }: {
-  on: boolean; onClick?: () => void; color: string; label: string; value: number; max: number; fixed?: boolean;
+function FilterRow({ on, onClick, color, label, value, max, fixed, locale }: {
+  on: boolean; onClick?: () => void; color: string; label: string; value: number; max: number; fixed?: boolean; locale: Locale;
 }) {
   const body = (
     <>
       <div className="flex items-center gap-2 text-[13px]">
         <span className="h-2.5 w-2.5 rounded-sm" style={{ background: on ? color : "#cbd5e1" }} />
         <span className="flex-1 text-left">{label}</span>
-        <span className="tabular-nums text-xs text-slate-600">{fmt(value)}</span>
+        <span className="tabular-nums text-xs text-slate-600">{fmt(value, locale)}</span>
       </div>
       <div className="mt-1 h-1 rounded bg-slate-900/5">
         <div className="h-full rounded transition-all" style={{ width: `${max ? (value / max) * 100 : 0}%`, background: on ? color : "#cbd5e1" }} />
@@ -211,10 +240,10 @@ function QuickToggle({ on, onClick, swatch, label }: { on: boolean; onClick: () 
   );
 }
 
-function FilterTag({ children, onClear }: { children: React.ReactNode; onClear: () => void }) {
+function FilterTag({ children, onClear, locale }: { children: React.ReactNode; onClear: () => void; locale: Locale }) {
   return (
     <button
-      onClick={onClear} title="Hapus filter ini"
+      onClick={onClear} title={text(locale, "Remove this filter", "Hapus filter ini")}
       className={`pointer-events-auto flex items-center gap-1.5 rounded-full border border-sky-400/40 bg-sky-500/15 py-1 pl-2.5 pr-2 text-[11px] text-sky-800 backdrop-blur hover:bg-sky-500/25 ${focusRing}`}
     >
       {children}
@@ -223,18 +252,18 @@ function FilterTag({ children, onClear }: { children: React.ReactNode; onClear: 
   );
 }
 
-/** Hasil pencarian lokasi online (Nominatim). Wilayah administratif ber-poligon juga memfilter data. */
-function PlaceList({ state, onPick }: { state: GeocodeState; onPick: (p: PlaceResult) => void }) {
+/** Online location search results (Nominatim). Administrative boundaries also filter the data. */
+function PlaceList({ state, onPick, locale }: { state: GeocodeState; onPick: (p: PlaceResult) => void; locale: Locale }) {
   if (state.status === "idle") return null;
   if (state.status === "loading") {
     return (
       <div className="flex items-center gap-2 px-3 py-2 text-xs text-slate-600" role="status">
-        <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500" />Mencari “{state.q}”…
+        <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500" />{text(locale, `Searching for “${state.q}”…`, `Mencari “${state.q}”…`)}
       </div>
     );
   }
-  if (state.status === "error") return <p className="px-3 py-2 text-xs text-red-600" role="alert">{state.message}</p>;
-  if (!state.results.length) return <p className="px-3 py-2 text-xs text-slate-500">Tidak ada hasil untuk “{state.q}”.</p>;
+  if (state.status === "error") return <p className="px-3 py-2 text-xs text-red-600" role="alert">{text(locale, state.message, "Pencarian lokasi gagal. Periksa koneksi lalu coba lagi.")}</p>;
+  if (!state.results.length) return <p className="px-3 py-2 text-xs text-slate-500">{text(locale, `No results for “${state.q}”.`, `Tidak ada hasil untuk “${state.q}”.`)}</p>;
   return (
     <>
       <ul>
@@ -250,13 +279,13 @@ function PlaceList({ state, onPick }: { state: GeocodeState; onPick: (p: PlaceRe
                 {p.detail && <span className="block truncate text-[10px] text-slate-500">{p.detail}</span>}
               </span>
               <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] ${p.geometry ? "bg-sky-500/15 text-sky-800" : "bg-slate-900/5 text-slate-600"}`}>
-                {p.geometry ? `${p.kind} · filter` : p.kind}
+                {p.geometry ? `${p.kind} · ${text(locale, "boundary", "batas wilayah")}` : p.kind}
               </span>
             </button>
           </li>
         ))}
       </ul>
-      <p className="px-3 pb-1.5 pt-1 text-[10px] leading-snug text-slate-500">Memilih wilayah ber-batas (provinsi, kabupaten, kota) juga memfilter data ke dalam batasnya. Sumber: OpenStreetMap Nominatim.</p>
+      <p className="px-3 pb-1.5 pt-1 text-[10px] leading-snug text-slate-500">{text(locale, "Selecting an area with boundaries (province, regency, or city) also filters data to those boundaries. Source: OpenStreetMap Nominatim.", "Memilih wilayah berbatas (provinsi, kabupaten, atau kota) juga memfilter data sesuai batas tersebut. Sumber: OpenStreetMap Nominatim.")}</p>
     </>
   );
 }
@@ -272,33 +301,33 @@ function StatItem({ k, v }: { k: string; v: string }) {
   );
 }
 
-function CompareCard({ stat, total, color, best }: { stat: OperatorStat; total: number; color: string; best: { count: number; coverage: number } }) {
+function CompareCard({ stat, total, color, best, locale }: { stat: OperatorStat; total: number; color: string; best: { count: number; coverage: number }; locale: Locale }) {
   const share = total ? (stat.count / total) * 100 : 0;
   const mix = TECH_ORDER.filter((r) => stat.byRadio[r] > 0);
-  const m = (v: number) => `${fmt(Math.round(v))} m`;
+  const m = (v: number) => `${fmt(Math.round(v), locale)} m`;
   const pct = (n: number) => (n / stat.count) * 100;
   return (
     <li className="rounded-lg border border-slate-900/10 bg-white px-2.5 py-2">
       <div className="flex items-center gap-2 text-[13px]">
         <Dot c={color} />
-        <span className="min-w-0 flex-1 truncate font-medium">{opName(stat.mnc)}</span>
-        <span className="tabular-nums">{fmt(stat.count)}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">{opName(stat.mnc, locale)}</span>
+        <span className="tabular-nums">{fmt(stat.count, locale)}</span>
         <span className="w-9 text-right text-[11px] tabular-nums text-slate-500">{share.toFixed(share < 10 ? 1 : 0)}%</span>
       </div>
       <div className="mt-1 h-[3px] rounded bg-slate-900/5" aria-hidden>
         <div className="h-full rounded" style={{ width: `${best.count ? (stat.count / best.count) * 100 : 0}%`, background: color }} />
       </div>
       <div className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-slate-900/5" role="img"
-        aria-label={`Teknologi: ${mix.map((r) => `${RADIOS[r]} ${pct(stat.byRadio[r]).toFixed(0)}%`).join(", ")}`}>
+        aria-label={`${text(locale, "Technology", "Teknologi")}: ${mix.map((r) => `${RADIOS[r]} ${pct(stat.byRadio[r]).toFixed(0)}%`).join(", ")}`}>
         {mix.map((r) => <span key={r} style={{ width: `${pct(stat.byRadio[r])}%`, background: RADIO_COLORS[r] }} />)}
       </div>
       <div className="mt-1 flex flex-wrap gap-x-2.5 text-[10px] text-slate-600">
-        {mix.map((r) => <span key={r} className="flex items-center gap-1"><Dot c={RADIO_COLORS[r]} />{RADIOS[r]} {fmt(stat.byRadio[r])}</span>)}
+        {mix.map((r) => <span key={r} className="flex items-center gap-1"><Dot c={RADIO_COLORS[r]} />{RADIOS[r]} {fmt(stat.byRadio[r], locale)}</span>)}
       </div>
       <dl className="mt-1.5 flex flex-wrap justify-between gap-x-3 gap-y-0.5 border-t border-slate-900/5 pt-1.5 text-[11px]">
-        <StatItem k="Rata-rata" v={m(stat.avgRange)} />
-        <StatItem k="Median" v={m(stat.medianRange)} />
-        <StatItem k="Est. cakupan" v={`${fmt(Math.round(stat.coverageKm2))} km²`} />
+        <StatItem k={text(locale, "Average range", "Jangkauan rata-rata")} v={m(stat.avgRange)} />
+        <StatItem k={text(locale, "Median", "Median")} v={m(stat.medianRange)} />
+        <StatItem k={text(locale, "Est. coverage", "Perkiraan cakupan")} v={`${fmt(Math.round(stat.coverageKm2), locale)} km²`} />
       </dl>
     </li>
   );
@@ -307,6 +336,8 @@ function CompareCard({ stat, total, color, best }: { stat: OperatorStat; total: 
 /* ---------- Dashboard ---------- */
 
 export default function Dashboard() {
+  const locale = useLocale();
+  const t = (english: string, indonesian: string) => text(locale, english, indonesian);
   const [data, setData] = useState<Dataset | null>(null);
   const [error, setError] = useState<{ message: string; detail: string } | null>(null);
   const [loaded, setLoaded] = useState<LoadStep[]>([]);
@@ -325,14 +356,15 @@ export default function Dashboard() {
   const [compareSort, setCompareSort] = useState<"count" | "coverage" | "range">("count");
   const [exportScope, setExportScope] = useState<"filter" | "view">("filter");
   const [exportMsg, setExportMsg] = useState("");
-  const topGeo = useGeocoder();
-  const areaGeo = useGeocoder();
+  const [exportMap, setExportMap] = useState<MLMap | null>(null);
+  const topGeo = useGeocoder(locale);
+  const areaGeo = useGeocoder(locale);
 
-  // UI: panel melayang (tertutup secara default agar peta lega)
+  // Floating panel, closed by default to maximize map space.
   const [tab, setTab] = useState<Tab | null>(null);
   const [lastTab, setLastTab] = useState<Tab>("layers");
   const [legendOpen, setLegendOpen] = useState(false);
-  // Legenda bisa digeser: offset (px) dari posisi bawaan, dibatasi agar tetap di dalam peta
+  // The draggable legend is constrained to remain inside the map.
   const legendRef = useRef<HTMLDivElement>(null);
   const mobileLegendRef = useRef<HTMLDivElement>(null);
   const [legendPos, setLegendPos] = useState<{ x: number; y: number }>(() => {
@@ -358,14 +390,14 @@ export default function Dashboard() {
   const [searchFocus, setSearchFocus] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const [areaQ, setAreaQ] = useState("");
-  const [areaRegion, setAreaRegion] = useState<"Semua" | (typeof REGIONS)[number]>("Semua");
+  const [areaRegion, setAreaRegion] = useState<"All" | (typeof REGIONS)[number]>("All");
 
   const openTab = (t: Tab) => {
     if (tab === t) { setTab(null); return; }
     setTab(t); setLastTab(t); setLegendOpen(false);
   };
 
-  // Batas geser legenda = area peta dikurangi margin 8px (posisi dasar = posisi sekarang dikurangi offset)
+  // Keep the legend within the map area with an 8px margin.
   const legendLimits = (cur: { x: number; y: number }, el = legendRef.current) => {
     const host = el?.offsetParent as HTMLElement | null;
     if (!el || !host) return null;
@@ -391,7 +423,7 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Indeks sistem kabel laut untuk pencarian
+  // Index submarine cable systems for search.
   useEffect(() => {
     fetch("/data/cables_telegeography.geojson")
       .then((r) => (r.ok ? r.json() : null))
@@ -491,7 +523,7 @@ export default function Dashboard() {
     saveLegend(position, mobile);
   };
 
-  // Pintasan keyboard: [ buka/tutup panel, / fokus ke pencarian, Esc tutup
+  // Keyboard shortcuts: [ toggles the panel, / focuses search, Esc closes.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
@@ -526,16 +558,16 @@ export default function Dashboard() {
         setError(
           e instanceof DataLoadError
             ? { message: e.userMessage, detail: e.detail }
-            : { message: "Data tidak bisa dimuat karena terjadi kesalahan tak terduga.", detail: e instanceof Error ? e.message : String(e) },
+            : { message: "Data could not be loaded due to an unexpected error.", detail: e instanceof Error ? e.message : String(e) },
         );
       });
     return () => ctrl.abort();
   }, [attempt]);
 
-  // Subset sel dalam wilayah aktif (null = semua). Hanya dihitung ulang saat wilayah berubah.
+  // Subset of cells in the active area (null = all). Recomputed only when the area changes.
   const regionIdx = useMemo(() => (data && region ? cellsInRegion(data.cells, region) : null), [data, region]);
 
-  // Hitung statistik + indeks sel yang lolos filter (di dalam wilayah aktif)
+  // Calculate statistics and filtered cell indices within the active area.
   const calc = useMemo(() => {
     if (!data) return null;
     const c = data.cells, n = c.radio.length, m = regionIdx ? regionIdx.length : n;
@@ -558,14 +590,14 @@ export default function Dashboard() {
     return { idx: Uint32Array.from(keep), mask, perOp, perRadio, avgRange: keep.length ? rangeSum / keep.length : 0, latest, total: n, scopeTotal: m };
   }, [data, ops, radios, minSamples, regionIdx]);
 
-  // Filter atribut untuk peta: diterapkan sebagai ekspresi filter layer, bukan dengan membangun ulang GeoJSON
+  // Apply attribute filters as layer expressions instead of rebuilding GeoJSON.
   const cellFilter = useMemo<CellFilter>(
     () => ({ knownOps: KNOWN_OPS, ops: [...ops].filter((m) => OPERATORS[m]), radios: [...radios], minSamples }),
     [ops, radios, minSamples],
   );
 
-  // Perbandingan operator: hanya dihitung saat tab terbuka. Mengikuti wilayah, teknologi, dan sampel
-  // (filter operator sengaja diabaikan, kalau tidak tak ada yang dibandingkan).
+  // Compare operators only while the tab is open. Respect area, technology, and sample filters.
+  // The operator filter is intentionally ignored so there is always something to compare.
   const boundsDeb = useDebounced(vp.bounds, 250);
   const compare = useMemo(() => {
     if (!data || tab !== "compare") return null;
@@ -591,7 +623,7 @@ export default function Dashboard() {
     set(x);
   };
 
-  // Hasil pencarian: koordinat, wilayah (preset), kabel laut, operator, lalu opsi cari online
+  // Search results: coordinates, preset areas, submarine cables, operators, and online search.
   type SearchResult =
     | { kind: "coord"; lon: number; lat: number }
     | { kind: "area"; p: Preset }
@@ -613,14 +645,14 @@ export default function Dashboard() {
       .filter(([, o]) => o.name.toLowerCase().includes(s))
       .map(([mnc, o]) => ({ kind: "op" as const, mnc: Number(mnc), name: o.name, color: o.color }));
     const list: SearchResult[] = [...areas, ...cablesFound, ...opsFound].slice(0, 7);
-    if (raw.length >= 3) list.push({ kind: "online", query: raw }); // provinsi/kabupaten/alamat lewat Nominatim
+    if (raw.length >= 3) list.push({ kind: "online", query: raw });
     return list;
   }, [q, cablesIndex]);
 
   const applyPlace = (p: PlaceResult) => {
     setPin(null);
-    if (p.geometry) setRegion(placeToRegion(p)); // wilayah ber-batas → ikut memfilter data
-    setView({ label: p.name, province: p.detail, region: "Nasional", center: p.center, zoom: 11, bounds: p.bbox, n: view.n + 1 });
+    if (p.geometry) setRegion(placeToRegion(p));
+    setView({ label: p.name, province: p.detail, region: "National", center: p.center, zoom: 11, bounds: p.bbox, n: view.n + 1 });
   };
   const pickPlace = (p: PlaceResult) => {
     applyPlace(p);
@@ -630,15 +662,15 @@ export default function Dashboard() {
     if (r.kind === "online") { topGeo.run(r.query); return; } // dropdown tetap terbuka untuk hasilnya
     if (r.kind === "coord") {
       setPin([r.lon, r.lat]);
-      setView({ label: "Koordinat", province: `${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}`, region: "Nasional", center: [r.lon, r.lat], zoom: 14, n: view.n + 1 });
+      setView({ label: "Coordinates", province: `${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}`, region: "National", center: [r.lon, r.lat], zoom: 14, n: view.n + 1 });
     } else if (r.kind === "area") {
       setView({ ...r.p, n: view.n + 1 });
     } else if (r.kind === "cable") {
       setShow((prev) => ({ ...prev, cables: true }));
       setView({
         label: r.item.name,
-        province: `Kabel Laut · ${r.item.is_planned ? "Rencana" : "Operasional"}${r.item.rfs_year ? ` (RFS ${r.item.rfs_year})` : ""}`,
-        region: "Nasional",
+        province: `Submarine cable · ${r.item.is_planned ? "Planned" : "Operational"}${r.item.rfs_year ? ` (RFS ${r.item.rfs_year})` : ""}`,
+        region: "National",
         center: r.item.center,
         zoom: 7.5,
         n: view.n + 1,
@@ -653,14 +685,14 @@ export default function Dashboard() {
     return (
       <div className="grid h-screen place-items-center bg-slate-50 p-6 text-center">
         <div className="max-w-sm space-y-3">
-          <p className="text-sm font-medium text-red-600">Data tidak bisa dimuat</p>
-          <p className="text-xs text-slate-700">{error.message}</p>
+          <p className="text-sm font-medium text-red-600">{t("Unable to load data", "Data tidak dapat dimuat")}</p>
+          <p className="text-xs text-slate-700">{localizeDataMessage(error.message, locale)}</p>
           <details className="text-left text-[11px] text-slate-500">
-            <summary className="cursor-pointer text-center">Detail teknis</summary>
+            <summary className="cursor-pointer text-center">{t("Technical details", "Detail teknis")}</summary>
             <p className="mt-1 break-words rounded bg-slate-900/5 p-2 font-mono">{error.detail}</p>
           </details>
           <button onClick={retryLoad} className={`rounded-lg bg-sky-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-400 ${focusRing}`}>
-            Muat ulang data
+            {t("Reload data", "Muat ulang data")}
           </button>
         </div>
       </div>
@@ -670,12 +702,12 @@ export default function Dashboard() {
     return (
       <div className="grid h-screen place-items-center bg-slate-50 text-slate-600">
         <div className="space-y-2 text-sm" role="status" aria-live="polite">
-          {([["cells", "Data sel BTS"], ["towers", "Data menara"]] as [LoadStep, string][]).map(([k, label]) => (
+          {([["cells", t("Cell site data", "Data BTS")], ["towers", t("Tower data", "Data menara")]] as [LoadStep, string][]).map(([k, label]) => (
             <div key={k} className="flex items-center gap-3">
               {loaded.includes(k)
                 ? <span className="grid h-4 w-4 place-items-center text-emerald-600" aria-hidden>✓</span>
                 : <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500" />}
-              <span className={loaded.includes(k) ? "text-slate-500" : ""}>{loaded.includes(k) ? `${label} siap` : `Memuat ${label.toLowerCase()}…`}</span>
+              <span className={loaded.includes(k) ? "text-slate-500" : ""}>{loaded.includes(k) ? `${label} ${t("ready", "siap")}` : `${t("Loading", "Memuat")} ${label.toLowerCase()}…`}</span>
             </div>
           ))}
         </div>
@@ -683,7 +715,7 @@ export default function Dashboard() {
     );
   }
 
-  const place = describePlace(vp.center, vp.zoom);
+  const place = describePlace(vp.center, vp.zoom, locale);
   const opRows = [...calc.perOp.entries()].sort((a, b) => b[1] - a[1]);
   const maxOp = opRows[0]?.[1] ?? 0;
   const maxRadio = Math.max(...calc.perRadio, 0);
@@ -704,24 +736,28 @@ export default function Dashboard() {
     setTab(null);
   };
   const kpi: [string, string, string?][] = [
-    ["Sel lolos filter", fmt(calc.idx.length), region ? `dari ${fmt(calc.scopeTotal)} sel di ${region.label}` : `dari ${fmt(calc.total)} sel`],
-    ["Menara OSM", fmt(data.towers.features.length)],
-    ["Kabel laut", "74 sistem", "146 stasiun"],
-    ["Fiber optik ITU", "1.060 segmen"],
+    [t("Filtered cell sites", "Sel BTS terfilter"), fmt(calc.idx.length, locale), region ? t(`of ${fmt(calc.scopeTotal, locale)} cell sites in ${region.label}`, `dari ${fmt(calc.scopeTotal, locale)} sel BTS di ${region.label}`) : t(`of ${fmt(calc.total, locale)} cell sites`, `dari ${fmt(calc.total, locale)} sel BTS`)],
+    [t("OSM towers", "Menara OSM"), fmt(data.towers.features.length, locale)],
+    [t("Submarine cables", "Kabel laut"), t("74 systems", "74 sistem"), t("146 landing stations", "146 stasiun pendaratan")],
+    [t("ITU fiber optic", "Fiber optik ITU"), t("1,060 segments", "1.060 segmen")],
   ];
   const quick: [ShowKey, string, React.ReactNode][] = [
-    ["cells", "Sel BTS", <Dot key="c" c="#f59e0b" />],
-    ["towers", "Menara", <Dot key="t" c="#fbbf24" />],
-    ["cables", "Kabel laut", <Line key="k" c="#38bdf8" />],
-    ["landingPoints", "Landing", <Dot key="l" c="#0891b2" ring />],
-    ["ituFiber", "Fiber", <Line key="f" c="#10b981" />],
+    ["cells", t("Cell sites", "Sel BTS"), <Dot key="c" c="#f59e0b" />],
+    ["towers", t("Towers", "Menara"), <Dot key="t" c="#fbbf24" />],
+    ["cables", t("Submarine cables", "Kabel laut"), <Line key="k" c="#38bdf8" />],
+    ["landingPoints", t("Landing stations", "Stasiun pendaratan"), <Dot key="l" c="#0891b2" ring />],
+    ["ituFiber", t("Fiber", "Fiber"), <Line key="f" c="#10b981" />],
   ];
-  const panelTitle: Record<Tab, string> = { layers: "Layer & peta dasar", filter: "Filter data", area: "Wilayah", compare: "Bandingkan operator", stats: "Ringkasan", export: "Ekspor data" };
+  const panelTitle: Record<Tab, string> = {
+    layers: t("Layers & basemap", "Layer & peta dasar"), filter: t("Data filters", "Filter data"),
+    area: t("Area", "Wilayah"), compare: t("Compare operators", "Bandingkan operator"),
+    stats: t("Summary", "Ringkasan"), export: t("Export data", "Ekspor data"),
+  };
 
   return (
     <main className="relative flex h-[100dvh] flex-col overflow-hidden bg-slate-50 text-slate-900 md:block md:h-screen">
 
-      {/* Toolbar atas: pencarian + toggle layer cepat + chip filter aktif */}
+      {/* Top toolbar: search, quick layer toggles, and active filter chips */}
       <div
         className={`relative z-20 flex shrink-0 flex-col gap-1.5 border-b border-slate-900/10 bg-white/95 px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] shadow-sm md:pointer-events-none md:absolute md:left-3 md:right-14 md:top-3 md:gap-2 md:border-0 md:bg-transparent md:p-0 md:shadow-none md:transition-[left] md:duration-200 ${
           tab ? (tab === "compare" ? "md:left-[492px]" : "md:left-[396px]") : "md:left-[76px]"
@@ -735,14 +771,14 @@ export default function Dashboard() {
               </span>
               <div className="min-w-0 leading-tight">
                 <p className="truncate text-[11px] font-bold tracking-[0.12em] text-slate-900">JEJARINGNUSA</p>
-                <p className="mt-0.5 truncate text-[10px] font-medium text-slate-500">Peta Infrastruktur Seluler</p>
+                <p className="mt-0.5 truncate text-[10px] font-medium text-slate-500">{t("Mobile Network Infrastructure Map", "Peta Infrastruktur Jaringan Seluler")}</p>
               </div>
             </div>
             <button
               type="button"
               onClick={goToIndonesia}
-              title="Kembali ke tampilan Indonesia"
-              aria-label="Kembali ke tampilan Indonesia"
+              title={t("Return to the Indonesia view", "Kembali ke tampilan Indonesia")}
+              aria-label={t("Return to the Indonesia view", "Kembali ke tampilan Indonesia")}
               className={`ml-3 shrink-0 rounded-full bg-slate-900/[0.04] px-2 py-1 text-[9px] font-semibold tracking-wide text-slate-500 transition hover:bg-sky-500/10 hover:text-sky-700 ${focusRing} lg:hidden`}
             >
               INDONESIA
@@ -756,26 +792,26 @@ export default function Dashboard() {
                 ref={searchRef} value={q} onChange={(e) => { setQ(e.target.value); topGeo.reset(); }}
                 onFocus={() => setSearchFocus(true)} onBlur={() => setTimeout(() => setSearchFocus(false), 120)}
                 onKeyDown={(e) => { if (e.key === "Enter" && results[0]) pickResult(results[0]); }}
-                placeholder="Kota, provinsi, koordinat, operator" aria-label="Cari wilayah, koordinat, atau operator"
+                placeholder={t("City, province, coordinates, operator", "Kota, provinsi, koordinat, operator")} aria-label={t("Search areas, coordinates, or operators", "Cari wilayah, koordinat, atau operator")}
                 className={`w-full rounded-xl py-2 pl-8 pr-7 text-xs text-slate-900 placeholder:text-slate-500 ${glass} ${focusRing}`}
               />
               {!q && <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500 md:block">/</kbd>}
               {searchFocus && q.trim() && (
                 <div className={`absolute left-0 top-full mt-1 max-h-[60vh] w-72 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl py-1 ${glass}`}>
                   {topGeo.state.status !== "idle" ? (
-                    <PlaceList state={topGeo.state} onPick={pickPlace} />
+                    <PlaceList state={topGeo.state} onPick={pickPlace} locale={locale} />
                   ) : (
                     <ul>
-                      {results.length === 0 && <li className="px-3 py-2 text-xs text-slate-500">Tidak ada hasil</li>}
+                      {results.length === 0 && <li className="px-3 py-2 text-xs text-slate-500">{t("No results", "Tidak ada hasil")}</li>}
                       {results.map((r) => (
                         <li key={r.kind === "area" ? `a-${r.p.label}` : r.kind === "cable" ? `c-${r.item.id}` : r.kind === "op" ? `o-${r.mnc}` : r.kind}>
                           <button onMouseDown={(e) => e.preventDefault()} onClick={() => pickResult(r)}
                             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-800 hover:bg-slate-900/5">
-                            {r.kind === "coord" && <><Icon name="pin" size={12} /><span className="flex-1">Ke koordinat</span><span className="text-[10px] tabular-nums text-slate-500">{r.lat.toFixed(4)}, {r.lon.toFixed(4)}</span></>}
-                            {r.kind === "area" && <><Icon name="pin" size={12} /><span className="flex-1">{r.p.label}</span><span className="max-w-[110px] truncate text-[10px] text-slate-500">{r.p.province}</span></>}
-                            {r.kind === "cable" && <><Line c="#38bdf8" /><span className="flex-1 truncate font-medium">{r.item.name}</span><span className="text-[10px] text-sky-700">Kabel Laut</span></>}
-                            {r.kind === "op" && <><Dot c={r.color} /><span className="flex-1">{r.name}</span><span className="text-[10px] text-slate-500">Hanya operator ini</span></>}
-                            {r.kind === "online" && <><Icon name="search" size={12} /><span className="flex-1 truncate">Cari “{r.query}” di OpenStreetMap</span><kbd className="rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500">↵</kbd></>}
+                            {r.kind === "coord" && <><Icon name="pin" size={12} /><span className="flex-1">{t("Go to coordinates", "Ke koordinat")}</span><span className="text-[10px] tabular-nums text-slate-500">{r.lat.toFixed(4)}, {r.lon.toFixed(4)}</span></>}
+                            {r.kind === "area" && <><Icon name="pin" size={12} /><span className="flex-1">{r.p.label}</span><span className="max-w-[110px] truncate text-[10px] text-slate-500">{localizedPresetName(r.p.province, locale)}</span></>}
+                            {r.kind === "cable" && <><Line c="#38bdf8" /><span className="flex-1 truncate font-medium">{r.item.name}</span><span className="text-[10px] text-sky-700">{t("Submarine cable", "Kabel laut")}</span></>}
+                            {r.kind === "op" && <><Dot c={r.color} /><span className="flex-1">{r.name}</span><span className="text-[10px] text-slate-500">{t("This operator only", "Hanya operator ini")}</span></>}
+                            {r.kind === "online" && <><Icon name="search" size={12} /><span className="flex-1 truncate">{t(`Search “${r.query}” on OpenStreetMap`, `Cari “${r.query}” di OpenStreetMap`)}</span><kbd className="rounded border border-slate-900/15 px-1 font-mono text-[10px] text-slate-500">↵</kbd></>}
                           </button>
                         </li>
                       ))}
@@ -785,7 +821,7 @@ export default function Dashboard() {
               )}
             </div>
 
-            <div className={`pointer-events-auto flex w-full min-w-0 gap-0.5 overflow-hidden rounded-xl p-0.5 md:w-auto md:overflow-x-auto md:p-1 ${glass}`} role="group" aria-label="Layer cepat">
+            <div className={`pointer-events-auto flex w-full min-w-0 gap-0.5 overflow-hidden rounded-xl p-0.5 md:w-auto md:overflow-x-auto md:p-1 ${glass}`} role="group" aria-label={t("Quick layers", "Layer cepat")}>
               {quick.map(([k, label, sw]) => (
                 <QuickToggle key={k} on={show[k]} onClick={() => setShow({ ...show, [k]: !show[k] })} swatch={sw} label={label} />
               ))}
@@ -795,28 +831,28 @@ export default function Dashboard() {
 
         {(dirty || pin) && (
           <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] md:flex-wrap md:justify-center md:overflow-visible">
-            {region && <FilterTag onClear={() => setRegion(null)}>{region.kind}: {region.label}</FilterTag>}
-            {pin && <FilterTag onClear={() => setPin(null)}>Titik {pin[1].toFixed(4)}, {pin[0].toFixed(4)}</FilterTag>}
-            {opsDirty && <FilterTag onClear={() => setOps(new Set(knownOps))}>Operator {ops.size}/{knownOps.length}</FilterTag>}
+            {region && <FilterTag locale={locale} onClear={() => setRegion(null)}>{localizedAreaKind(region.kind, locale)}: {localizedPresetName(region.label, locale)}</FilterTag>}
+            {pin && <FilterTag locale={locale} onClear={() => setPin(null)}>{t("Point", "Titik")} {pin[1].toFixed(4)}, {pin[0].toFixed(4)}</FilterTag>}
+            {opsDirty && <FilterTag locale={locale} onClear={() => setOps(new Set(knownOps))}>{t("Operators", "Operator")} {ops.size}/{knownOps.length}</FilterTag>}
             {radiosDirty && (
-              <FilterTag onClear={() => setRadios(new Set(allRadios))}>
-                {radios.size ? [...radios].sort().map((i) => RADIOS[i]).join(", ") : "Tanpa teknologi"}
+              <FilterTag locale={locale} onClear={() => setRadios(new Set(allRadios))}>
+                {radios.size ? [...radios].sort().map((i) => RADIOS[i]).join(", ") : t("No technology", "Tanpa teknologi")}
               </FilterTag>
             )}
-            {samplesDirty && <FilterTag onClear={() => setMinSamples(1)}>Sampel ≥ {minSamples}</FilterTag>}
+            {samplesDirty && <FilterTag locale={locale} onClear={() => setMinSamples(1)}>{t("Samples", "Sampel")} ≥ {minSamples}</FilterTag>}
             {dirty && <button onClick={resetFilters} className={`pointer-events-auto shrink-0 rounded px-1.5 text-[11px] text-slate-700 underline-offset-2 hover:text-slate-900 hover:underline ${focusRing}`}>
-              Reset
+              {t("Reset", "Atur ulang")}
             </button>}
           </div>
         )}
       </div>
 
-      {/* Area peta: di mobile berada di antara bar atas & bawah (tidak tertutup); di desktop memenuhi layar */}
+      {/* On mobile, the map sits between the top and bottom bars; on desktop, it fills the screen. */}
       <div className="relative min-h-0 flex-1 md:absolute md:inset-0 md:flex-none">
-  <MapView cells={data.cells} mask={calc.mask} sourceIdx={regionIdx} filter={cellFilter} region={region} marker={pin} towers={data.towers} show={show} mode={mode} view={view} basemap={basemap} onViewport={setVp} />
+  <MapView cells={data.cells} mask={calc.mask} sourceIdx={regionIdx} filter={cellFilter} region={region} marker={pin} towers={data.towers} show={show} mode={mode} view={view} basemap={basemap} locale={locale} onViewport={setVp} onMapReady={setExportMap} />
       {/* Panel melayang: hanya satu bagian terbuka pada satu waktu */}
       <aside
-        aria-label="Panel kontrol" aria-hidden={!tab} inert={!tab}
+        aria-label={t("Control panel", "Panel kontrol")} aria-hidden={!tab} inert={!tab}
         className={`absolute inset-x-2 bottom-2 z-30 flex max-h-[80%] flex-col overflow-hidden rounded-2xl transition duration-200 md:inset-x-auto md:bottom-auto md:left-[60px] md:top-3 md:max-h-[calc(100%-1.5rem)] ${lastTab === "compare" ? "md:w-[26rem]" : "md:w-80"} ${glass} ${
           tab ? "translate-y-0 opacity-100 md:translate-x-0" : "pointer-events-none translate-y-2 opacity-0 md:-translate-x-2 md:translate-y-0"
         }`}
@@ -828,10 +864,10 @@ export default function Dashboard() {
             </span>
             <div className="min-w-0">
               <h1 className="truncate text-sm font-semibold">{panelTitle[lastTab]}</h1>
-              <p className="truncate text-[11px] text-slate-500">Peta Infrastruktur Jaringan & Seluler Indonesia</p>
+              <p className="truncate text-[11px] text-slate-500">{t("Indonesia Network & Mobile Infrastructure Map", "Peta Infrastruktur Jaringan & Seluler Indonesia")}</p>
             </div>
           </div>
-          <button onClick={() => setTab(null)} aria-label="Tutup panel" className={`rounded p-1 text-slate-600 hover:bg-slate-900/5 hover:text-slate-900 ${focusRing}`}>
+          <button onClick={() => setTab(null)} aria-label={t("Close panel", "Tutup panel")} className={`rounded p-1 text-slate-600 hover:bg-slate-900/5 hover:text-slate-900 ${focusRing}`}>
             <Icon name="close" />
           </button>
         </header>
@@ -839,24 +875,24 @@ export default function Dashboard() {
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
           {lastTab === "layers" && (
             <div className="space-y-1">
-              <LayerRow on={show.cells} onToggle={() => setShow({ ...show, cells: !show.cells })} swatch={<Dot c="#f59e0b" />} label="Sel BTS" meta={fmt(calc.idx.length)}>
+              <LayerRow on={show.cells} onToggle={() => setShow({ ...show, cells: !show.cells })} swatch={<Dot c="#f59e0b" />} label={t("Cell sites", "Sel BTS")} meta={fmt(calc.idx.length, locale)}>
                 <span className="w-full">
-                  <Segmented value={mode} onChange={setMode} label="Mode sel"
-                    options={[{ id: "points", label: "Titik" }, { id: "heat", label: "Heatmap" }]} />
+                  <Segmented value={mode} onChange={setMode} label={t("Cell display mode", "Mode tampilan sel")}
+                    options={[{ id: "points", label: t("Points", "Titik") }, { id: "heat", label: "Heatmap" }]} />
                 </span>
               </LayerRow>
-              <LayerRow on={show.towers} onToggle={() => setShow({ ...show, towers: !show.towers })} swatch={<Dot c="#fbbf24" />} label="Menara OSM" meta={fmt(data.towers.features.length)} />
-              <LayerRow on={show.cables} onToggle={() => setShow({ ...show, cables: !show.cables })} swatch={<Line c="#38bdf8" />} label="Kabel laut" meta="74 sistem" />
-              <LayerRow on={show.landingPoints} onToggle={() => setShow({ ...show, landingPoints: !show.landingPoints })} swatch={<Dot c="#0891b2" ring />} label="Landing station" meta="146 lokasi" />
-              <LayerRow on={show.ituFiber} onToggle={() => setShow({ ...show, ituFiber: !show.ituFiber })} swatch={<Line c="#10b981" />} label="Fiber optik & microwave" meta="1.060 segmen">
-                <Legend c="#10b981">Operasional (874)</Legend>
-                <Legend c="#ca8a04">Rencana (95)</Legend>
+              <LayerRow on={show.towers} onToggle={() => setShow({ ...show, towers: !show.towers })} swatch={<Dot c="#fbbf24" />} label={t("OSM towers", "Menara OSM")} meta={fmt(data.towers.features.length, locale)} />
+              <LayerRow on={show.cables} onToggle={() => setShow({ ...show, cables: !show.cables })} swatch={<Line c="#38bdf8" />} label={t("Submarine cables", "Kabel laut")} meta={t("74 systems", "74 sistem")} />
+              <LayerRow on={show.landingPoints} onToggle={() => setShow({ ...show, landingPoints: !show.landingPoints })} swatch={<Dot c="#0891b2" ring />} label={t("Landing stations", "Stasiun pendaratan")} meta={t("146 locations", "146 lokasi")} />
+              <LayerRow on={show.ituFiber} onToggle={() => setShow({ ...show, ituFiber: !show.ituFiber })} swatch={<Line c="#10b981" />} label={t("Fiber optic & microwave", "Fiber optik & microwave")} meta={t("1,060 segments", "1.060 segmen")}>
+                <Legend c="#10b981">{t("Operational", "Operasional")} (874)</Legend>
+                <Legend c="#ca8a04">{t("Planned", "Rencana")} (95)</Legend>
                 <Legend c="#9333ea">Microwave (91)</Legend>
               </LayerRow>
-              <SubHead title="Peta dasar" />
+              <SubHead title={t("Basemap", "Peta dasar")} />
               <div className="px-1">
-                <Segmented value={basemap} onChange={setBasemap} label="Peta dasar"
-                  options={[{ id: "dark", label: "Gelap" }, { id: "light", label: "Terang" }, { id: "voyager", label: "Voyager" }]} />
+                <Segmented value={basemap} onChange={setBasemap} label={t("Basemap", "Peta dasar")}
+                  options={[{ id: "dark", label: t("Dark", "Gelap") }, { id: "light", label: t("Light", "Terang") }, { id: "voyager", label: "Voyager" }]} />
               </div>
             </div>
           )}
@@ -864,11 +900,11 @@ export default function Dashboard() {
           {lastTab === "filter" && (
             <div className="space-y-1">
               <SubHead
-                title="Operator"
+                title={t("Operators", "Operator")}
                 action={
                   <span className="flex gap-3">
-                    <button className={linkBtn} onClick={() => setOps(new Set(knownOps))}>Semua</button>
-                    <button className={linkBtn} onClick={() => setOps(new Set())}>Kosongkan</button>
+                    <button className={linkBtn} onClick={() => setOps(new Set(knownOps))}>{t("All", "Semua")}</button>
+                    <button className={linkBtn} onClick={() => setOps(new Set())}>{t("Clear", "Kosongkan")}</button>
                   </span>
                 }
               />
@@ -876,7 +912,7 @@ export default function Dashboard() {
                 const known = OPERATORS[mnc];
                 return (
                   <FilterRow
-                    key={mnc} fixed={!known} on={!known || ops.has(mnc)} max={maxOp} value={n}
+                    key={mnc} fixed={!known} on={!known || ops.has(mnc)} max={maxOp} value={n} locale={locale}
                     color={known?.color ?? OTHER_COLOR} label={known?.name ?? `MNC ${mnc}`}
                     onClick={() => toggle(ops, mnc, setOps)}
                   />
@@ -884,35 +920,35 @@ export default function Dashboard() {
               })}
 
               <SubHead
-                title="Teknologi"
+                title={t("Technology", "Teknologi")}
                 action={
                   <span className="flex gap-3">
-                    <button className={linkBtn} onClick={() => setRadios(new Set(allRadios))}>Semua</button>
-                    <button className={linkBtn} onClick={() => setRadios(new Set())}>Kosongkan</button>
+                    <button className={linkBtn} onClick={() => setRadios(new Set(allRadios))}>{t("All", "Semua")}</button>
+                    <button className={linkBtn} onClick={() => setRadios(new Set())}>{t("Clear", "Kosongkan")}</button>
                   </span>
                 }
               />
               {RADIOS.map((r, i) => (
-                <FilterRow key={r} on={radios.has(i)} onClick={() => toggle(radios, i, setRadios)}
+                <FilterRow key={r} locale={locale} on={radios.has(i)} onClick={() => toggle(radios, i, setRadios)}
                   color={RADIO_COLORS[i]} label={r} value={calc.perRadio[i]} max={maxRadio} />
               ))}
 
-              <SubHead title="Akurasi posisi" />
+              <SubHead title={t("Location accuracy", "Akurasi posisi")} />
               <div className="space-y-1.5 px-2">
                 <div className="flex justify-between text-xs">
-                  <span className="text-slate-700">Minimal sampel</span>
+                  <span className="text-slate-700">{t("Minimum samples", "Minimal sampel")}</span>
                   <span className="tabular-nums text-sky-700">{minSamples}</span>
                 </div>
                 <input
-                  type="range" min={1} max={30} value={minSamples} aria-label="Minimal sampel"
+                  type="range" min={1} max={30} value={minSamples} aria-label={t("Minimum samples", "Minimal sampel")}
                   onChange={(e) => setMinSamples(+e.target.value)} className="w-full accent-sky-500"
                 />
-                <p className="text-[11px] leading-snug text-slate-500">Makin banyak sampel, makin akurat posisi sel. Rata-rata jangkauan sel tampil: {fmt(Math.round(calc.avgRange))} m.</p>
+                <p className="text-[11px] leading-snug text-slate-500">{t(`More samples improve cell location accuracy. Average range of visible cells: ${fmt(Math.round(calc.avgRange), locale)} m.`, `Semakin banyak sampel, semakin akurat lokasi sel. Rata-rata jangkauan sel yang terlihat: ${fmt(Math.round(calc.avgRange), locale)} m.`)}</p>
               </div>
 
               {dirty && (
                 <button onClick={resetFilters} className={`mt-3 w-full rounded-lg border border-slate-900/15 py-1.5 text-xs text-slate-800 hover:bg-slate-900/5 ${focusRing}`}>
-                  Reset semua filter
+                  {t("Reset all filters", "Atur ulang semua filter")}
                 </button>
               )}
             </div>
@@ -921,29 +957,29 @@ export default function Dashboard() {
           {lastTab === "area" && (() => {
             const s = areaQ.trim().toLowerCase();
             const list = PRESETS.filter((p) =>
-              (areaRegion === "Semua" || p.region === areaRegion) &&
-              (!s || p.label.toLowerCase().includes(s) || p.province.toLowerCase().includes(s)));
+              (areaRegion === "All" || p.region === areaRegion) &&
+              (!s || p.label.toLowerCase().includes(s) || p.province.toLowerCase().includes(s) || localizedPresetName(p.province, "id").toLowerCase().includes(s)));
             return (
               <div>
-                <section aria-label="Filter wilayah" className="mb-3 space-y-2 rounded-xl bg-slate-900/[0.04] p-2.5">
+                <section aria-label={t("Area filter", "Filter wilayah")} className="mb-3 space-y-2 rounded-xl bg-slate-900/[0.04] p-2.5">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Filter wilayah</h3>
-                    {region && <button className={linkBtn} onClick={() => setRegion(null)}>Hapus</button>}
+                    <h3 className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{t("Area filter", "Filter wilayah")}</h3>
+                    {region && <button className={linkBtn} onClick={() => setRegion(null)}>{t("Remove", "Hapus")}</button>}
                   </div>
                   {region ? (
                     <div className="text-xs">
-                      <div className="font-medium">{region.label} <span className="font-normal text-slate-500">· {region.kind}</span></div>
-                      <div className="tabular-nums text-slate-600">{fmt(calc.scopeTotal)} sel di dalam wilayah</div>
+                      <div className="font-medium">{localizedPresetName(region.label, locale)} <span className="font-normal text-slate-500">· {localizedAreaKind(region.kind, locale)}</span></div>
+                      <div className="tabular-nums text-slate-600">{t(`${fmt(calc.scopeTotal, locale)} cell sites in this area`, `${fmt(calc.scopeTotal, locale)} sel BTS di wilayah ini`)}</div>
                     </div>
                   ) : (
-                    <p className="text-[11px] leading-snug text-slate-500">Cari provinsi atau kabupaten di bawah, atau batasi data ke area yang sedang terlihat.</p>
+                    <p className="text-[11px] leading-snug text-slate-500">{t("Search for a province or regency below, or limit data to the currently visible map area.", "Cari provinsi atau kabupaten di bawah, atau batasi data ke area peta yang terlihat.")}</p>
                   )}
                   <button
                     disabled={!vp.bounds}
-                    onClick={() => vp.bounds && setRegion({ label: "Tampilan peta", kind: "Persegi", bbox: vp.bounds })}
+                    onClick={() => vp.bounds && setRegion({ label: t("Map view", "Tampilan peta"), kind: t("Rectangle", "Persegi"), bbox: vp.bounds })}
                     className={`w-full rounded-lg border border-slate-900/15 py-1 text-xs text-slate-800 hover:bg-slate-900/5 disabled:opacity-40 ${focusRing}`}
                   >
-                    Batasi ke tampilan peta saat ini
+                    {t("Limit to current map view", "Batasi ke tampilan peta saat ini")}
                   </button>
                 </section>
                 <div className="sticky -top-3 z-10 -mx-3 space-y-1.5 border-b border-slate-900/10 bg-white/95 px-3 pb-2 pt-2.5">
@@ -952,36 +988,36 @@ export default function Dashboard() {
                     <input
                       value={areaQ} onChange={(e) => { setAreaQ(e.target.value); areaGeo.reset(); }}
                       onKeyDown={(e) => { if (e.key === "Enter" && areaQ.trim().length >= 3) areaGeo.run(areaQ); }}
-                      placeholder="Cari kota, provinsi, atau kabupaten" aria-label="Cari wilayah"
+                      placeholder={t("Search city, province, or regency", "Cari kota, provinsi, atau kabupaten")} aria-label={t("Search area", "Cari wilayah")}
                       className={`w-full rounded-lg border border-slate-900/10 bg-slate-900/5 py-1 pl-7 pr-7 text-xs text-slate-900 placeholder:text-slate-500 ${focusRing}`}
                     />
                     {areaQ && (
-                      <button onClick={() => { setAreaQ(""); areaGeo.reset(); }} aria-label="Hapus pencarian" className={`absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-500 hover:text-slate-900 ${focusRing}`}>
+                      <button onClick={() => { setAreaQ(""); areaGeo.reset(); }} aria-label={t("Clear search", "Hapus pencarian")} className={`absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-500 hover:text-slate-900 ${focusRing}`}>
                         <Icon name="close" size={10} />
                       </button>
                     )}
                   </div>
                   <div className="-mx-3 flex gap-1 overflow-x-auto px-3 pb-0.5 [scrollbar-width:none]">
-                    {(["Semua", ...REGIONS] as const).map((r) => (
-                      <Chip key={r} small on={areaRegion === r} onClick={() => setAreaRegion(r)}>{r === "Bali & Nusa Tenggara" ? "Bali & NT" : r}</Chip>
+                    {(["All", ...REGIONS] as const).map((r) => (
+                      <Chip key={r} small on={areaRegion === r} onClick={() => setAreaRegion(r)}>{r === "All" ? t("All", "Semua") : localizedPresetName(r === "Java" ? "Java" : r, locale)}</Chip>
                     ))}
                   </div>
                 </div>
                 <div className="flex items-center justify-between px-0.5 pb-1 pt-2 text-[10px] text-slate-500">
-                  <span>{list.length} lokasi</span>
-                  {(areaQ || areaRegion !== "Semua") && (
-                    <button className={linkBtn} onClick={() => { setAreaQ(""); setAreaRegion("Semua"); }}>Reset</button>
+                  <span>{t(`${list.length} locations`, `${list.length} lokasi`)}</span>
+                  {(areaQ || areaRegion !== "All") && (
+                    <button className={linkBtn} onClick={() => { setAreaQ(""); setAreaRegion("All"); }}>{t("Reset", "Atur ulang")}</button>
                   )}
                 </div>
                 {list.length === 0 ? (
-                  <p className="px-1 py-4 text-center text-xs text-slate-500">Tidak ada lokasi yang cocok.</p>
+                  <p className="px-1 py-4 text-center text-xs text-slate-500">{t("No matching locations.", "Tidak ada lokasi yang cocok.")}</p>
                 ) : (
                   <div className="flex flex-wrap gap-1">
                     {list.map((p) => (
                       <Chip
                         key={p.label} small
                         on={view.label === p.label && view.n > 0}
-                        title={`${p.label} · ${p.province}`}
+                        title={`${p.label} · ${localizedPresetName(p.province, locale)}`}
                         onClick={() => setView({ ...p, n: view.n + 1 })}
                       >
                         {p.label}
@@ -993,10 +1029,10 @@ export default function Dashboard() {
                   <div className="mt-2 border-t border-slate-900/10 pt-2">
                     {areaGeo.state.status === "idle" && (
                       <button className={`${linkBtn} px-0.5 text-xs`} onClick={() => areaGeo.run(areaQ)}>
-                        Cari “{areaQ.trim()}” di seluruh Indonesia (OpenStreetMap)
+                        {t(`Search all of Indonesia for “${areaQ.trim()}” (OpenStreetMap)`, `Cari “${areaQ.trim()}” di seluruh Indonesia (OpenStreetMap)`)}
                       </button>
                     )}
-                    <div className="-mx-3"><PlaceList state={areaGeo.state} onPick={pickPlace} /></div>
+                    <div className="-mx-3"><PlaceList state={areaGeo.state} onPick={pickPlace} locale={locale} /></div>
                   </div>
                 )}
               </div>
@@ -1011,27 +1047,27 @@ export default function Dashboard() {
             return (
               <div className="space-y-3">
                 <div className="space-y-1.5">
-                  <Segmented value={compareScope} onChange={setCompareScope} label="Cakupan perbandingan"
-                    options={[{ id: "region", label: region ? short(region.label) : "Seluruh data" }, { id: "view", label: "Tampilan peta" }]} />
-                  <Segmented value={compareSort} onChange={setCompareSort} label="Urutkan berdasarkan"
-                    options={[{ id: "count", label: "Jumlah sel" }, { id: "coverage", label: "Cakupan" }, { id: "range", label: "Jangkauan" }]} />
+                  <Segmented value={compareScope} onChange={setCompareScope} label={t("Comparison scope", "Cakupan perbandingan")}
+                    options={[{ id: "region", label: region ? short(localizedPresetName(region.label, locale)) : t("All data", "Seluruh data") }, { id: "view", label: t("Map view", "Tampilan peta") }]} />
+                  <Segmented value={compareSort} onChange={setCompareSort} label={t("Sort by", "Urutkan berdasarkan")}
+                    options={[{ id: "count", label: t("Cell sites", "Jumlah sel") }, { id: "coverage", label: t("Coverage", "Cakupan") }, { id: "range", label: t("Range", "Jangkauan") }]} />
                 </div>
                 {!compare ? null : compare.total === 0 ? (
-                  <p className="px-1 py-4 text-center text-xs text-slate-500">Tidak ada sel pada cakupan ini.</p>
+                  <p className="px-1 py-4 text-center text-xs text-slate-500">{t("No cell sites in this scope.", "Tidak ada sel pada cakupan ini.")}</p>
                 ) : (
                   <>
                     <p className="px-1 text-[11px] text-slate-600" aria-live="polite">
-                      {fmt(compare.total)} sel · {compareScope === "view" ? "area yang terlihat" : region ? region.label : "seluruh Indonesia"}
-                      {(radiosDirty || samplesDirty) && " · mengikuti filter teknologi & sampel"}
+                      {t(`${fmt(compare.total, locale)} cell sites · ${compareScope === "view" ? "visible area" : region ? localizedPresetName(region.label, locale) : "all of Indonesia"}`, `${fmt(compare.total, locale)} sel BTS · ${compareScope === "view" ? "area yang terlihat" : region ? localizedPresetName(region.label, locale) : "seluruh Indonesia"}`)}
+                      {(radiosDirty || samplesDirty) && t(" · follows technology and sample filters", " · mengikuti filter teknologi dan sampel")}
                     </p>
                     <ul className="space-y-1.5">
                       {rows.map((r) => (
-                        <CompareCard key={r.mnc} stat={r} total={compare.total} best={best} color={OPERATORS[r.mnc]?.color ?? OTHER_COLOR} />
+                        <CompareCard key={r.mnc} stat={r} total={compare.total} best={best} color={OPERATORS[r.mnc]?.color ?? OTHER_COLOR} locale={locale} />
                       ))}
                     </ul>
                     <details className="px-1 text-[10px] leading-snug text-slate-500">
-                      <summary className="cursor-pointer text-[11px] text-sky-700">Catatan metode</summary>
-                      <p className="mt-1">Filter operator tidak berlaku di sini. Estimasi cakupan = gabungan lingkaran jangkauan tiap sel (area tumpang tindih dihitung sekali), bukan pengukuran kuat sinyal. Jangkauan adalah radius perkiraan dari data crowdsourced.</p>
+                      <summary className="cursor-pointer text-[11px] text-sky-700">{t("Methodology", "Catatan metode")}</summary>
+                      <p className="mt-1">{t("The operator filter does not apply here. Estimated coverage is the union of each cell site’s range circles (overlapping areas are counted once), not a signal-strength measurement. Range is an approximate radius from crowdsourced data.", "Filter operator tidak berlaku di sini. Estimasi cakupan adalah gabungan lingkaran jangkauan setiap sel (area tumpang tindih dihitung sekali), bukan pengukuran kekuatan sinyal. Jangkauan merupakan radius perkiraan dari data crowdsourced.")}</p>
                     </details>
                   </>
                 )}
@@ -1044,38 +1080,58 @@ export default function Dashboard() {
             const doExport = (kind: "csv" | "geojson") => {
               const c = data.cells, b = vp.bounds;
               const idx = exportScope === "view" && b ? Array.from(calc.idx).filter((i) => inBBox(c.lon[i], c.lat[i], b)) : calc.idx;
-              const names = { operator: opName, radio: (r: number) => RADIOS[r] ?? String(r) };
-              const file = exportFilename(["sel-bts", region?.label ?? "", exportScope === "view" ? "tampilan-peta" : ""], kind);
+              const names = { operator: (mnc: number) => opName(mnc, locale), radio: (r: number) => RADIOS[r] ?? String(r) };
+              const file = exportFilename(["cell-sites", region?.label ?? "", exportScope === "view" ? "map-view" : ""], kind);
               if (kind === "csv") download(file, "text/csv", cellsToCSV(c, idx, names));
               else download(file, "application/geo+json", JSON.stringify(cellsToExportGeoJSON(c, idx, names)));
-              setExportMsg(`${fmt(idx.length)} sel diekspor ke ${file}`);
+              setExportMsg(t(`${fmt(idx.length, locale)} cell sites exported to ${file}`, `${fmt(idx.length, locale)} sel BTS diekspor ke ${file}`));
             };
             const active = [
-              region && `Wilayah: ${region.label}`,
-              opsDirty && `Operator ${ops.size}/${knownOps.length}`,
-              radiosDirty && `Teknologi: ${radios.size ? [...radios].sort().map((i) => RADIOS[i]).join(", ") : "tidak ada"}`,
-              samplesDirty && `Sampel ≥ ${minSamples}`,
+              region && t(`Area: ${localizedPresetName(region.label, locale)}`, `Wilayah: ${localizedPresetName(region.label, locale)}`),
+              opsDirty && t(`Operators ${ops.size}/${knownOps.length}`, `Operator ${ops.size}/${knownOps.length}`),
+              radiosDirty && t(`Technology: ${radios.size ? [...radios].sort().map((i) => RADIOS[i]).join(", ") : "none"}`, `Teknologi: ${radios.size ? [...radios].sort().map((i) => RADIOS[i]).join(", ") : "tidak ada"}`),
+              samplesDirty && t(`Samples ≥ ${minSamples}`, `Sampel ≥ ${minSamples}`),
             ].filter(Boolean) as string[];
             return (
               <div className="space-y-3">
-                <Segmented value={exportScope} onChange={(v) => { setExportScope(v); setExportMsg(""); }} label="Cakupan ekspor"
-                  options={[{ id: "filter", label: "Semua hasil filter" }, { id: "view", label: "Hanya tampilan peta" }]} />
+                <Segmented value={exportScope} onChange={(v) => { setExportScope(v); setExportMsg(""); }} label={t("Export scope", "Cakupan ekspor")}
+                  options={[{ id: "filter", label: t("All filtered results", "Semua hasil filter") }, { id: "view", label: t("Visible map area only", "Hanya area peta yang terlihat") }]} />
                 <div className="rounded-xl bg-slate-900/[0.04] px-3 py-2.5 text-xs">
-                  <div className="text-[11px] text-slate-500">Akan diekspor</div>
-                  <div className="text-[15px] font-semibold tabular-nums">{fmt(count)} sel</div>
-                  <div className="mt-1 text-[11px] text-slate-600">{active.length ? active.join(" · ") : "Tanpa filter: semua sel"}</div>
+                  <div className="text-[11px] text-slate-500">{t("Ready to export", "Siap diekspor")}</div>
+                  <div className="text-[15px] font-semibold tabular-nums">{t(`${fmt(count, locale)} cell sites`, `${fmt(count, locale)} sel BTS`)}</div>
+                  <div className="mt-1 text-[11px] text-slate-600">{active.length ? active.join(" · ") : t("No filters: all cell sites", "Tanpa filter: semua sel BTS")}</div>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   {(["csv", "geojson"] as const).map((k) => (
                     <button key={k} disabled={count === 0} onClick={() => doExport(k)}
                       className={`flex items-center justify-center gap-1.5 rounded-lg bg-sky-500 py-1.5 text-xs font-medium text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-40 ${focusRing}`}>
                       <Icon name="download" size={13} />{k === "csv" ? "CSV" : "GeoJSON"}
                     </button>
                   ))}
+                  <button disabled={!exportMap} onClick={async () => {
+                    const map = exportMap;
+                    if (!map) {
+                      setExportMsg(t("The map is not ready yet. Please try again.", "Peta belum siap. Silakan coba lagi."));
+                      return;
+                    }
+                    const file = exportFilename(["cell-sites", region?.label ?? "", "map-view"], "png");
+                    setExportMsg(t("Preparing map image…", "Menyiapkan gambar peta…"));
+                    try {
+                      await downloadCanvasAsPNG(file, map.getCanvas());
+                      setExportMsg(t(`Map image exported to ${file}`, `Gambar peta diekspor ke ${file}`));
+                    } catch (error) {
+                      console.error("Map image export failed:", error);
+                      setExportMsg(t("Could not export the map image. The browser may block capture of cross-origin map tiles.", "Gambar peta tidak dapat diekspor. Browser mungkin memblokir pengambilan tile peta lintas origin."));
+                    }
+                  }}
+                    className={`flex items-center justify-center gap-1.5 rounded-lg bg-sky-500 py-1.5 text-xs font-medium text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-40 ${focusRing}`}
+                    title={t("Export the current map view as a PNG image", "Ekspor tampilan peta saat ini sebagai gambar PNG")}>
+                    <Icon name="download" size={13} />PNG
+                  </button>
                 </div>
-                <p className="min-h-4 px-1 text-[11px] text-emerald-700" role="status" aria-live="polite">{exportMsg}</p>
+                <p className={`min-h-4 px-1 text-[11px] ${exportMsg.startsWith("Could not") ? "text-red-600" : "text-emerald-700"}`} role="status" aria-live="polite">{exportMsg}</p>
                 <p className="px-1 text-[10px] leading-snug text-slate-500">
-                  Kolom: radio, mcc, mnc, operator, tac, cell_id, lon, lat, range_m, samples, updated. Periksa lisensi sumber data (mis. OpenCelliD CC BY-SA, OpenStreetMap ODbL) dan cantumkan atribusi bila membagikan hasilnya.
+                  {t("Data columns: radio, mcc, mnc, operator, tac, cell_id, lon, lat, range_m, samples, updated. Check source data licenses (e.g. OpenCelliD CC BY-SA and OpenStreetMap ODbL) and include attribution when sharing. PNG captures the current map view and visible layers.", "Kolom data: radio, mcc, mnc, operator, tac, cell_id, lon, lat, range_m, samples, updated. Periksa lisensi sumber data (mis. OpenCelliD CC BY-SA dan OpenStreetMap ODbL) serta cantumkan atribusi saat membagikan hasil. PNG mengambil tampilan peta dan layer yang sedang terlihat.")}
                 </p>
               </div>
             );
@@ -1093,16 +1149,16 @@ export default function Dashboard() {
                 ))}
               </div>
               <div className="space-y-1 rounded-xl bg-slate-900/[0.04] px-3 py-2.5 text-xs">
-                <div className="flex justify-between"><span className="text-slate-600">Dalam tampilan peta</span><span className="tabular-nums">{fmt(vp.cells)} sel · {fmt(vp.towers)} menara</span></div>
-                <div className="flex justify-between"><span className="text-slate-600">Rata-rata jangkauan</span><span className="tabular-nums">{fmt(Math.round(calc.avgRange))} m</span></div>
+                <div className="flex justify-between"><span className="text-slate-600">{t("In map view", "Dalam tampilan peta")}</span><span className="tabular-nums">{t(`${fmt(vp.cells, locale)} cell sites · ${fmt(vp.towers, locale)} towers`, `${fmt(vp.cells, locale)} sel BTS · ${fmt(vp.towers, locale)} menara`)}</span></div>
+                <div className="flex justify-between"><span className="text-slate-600">{t("Average range", "Jangkauan rata-rata")}</span><span className="tabular-nums">{fmt(Math.round(calc.avgRange), locale)} m</span></div>
                 {calc.latest > 0 && (
-                  <div className="flex justify-between"><span className="text-slate-600">Pembaruan terakhir</span><span className="tabular-nums">{new Date(calc.latest * 1000).toLocaleDateString("id-ID")}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-600">{t("Last updated", "Pembaruan terakhir")}</span><span className="tabular-nums">{new Date(calc.latest * 1000).toLocaleDateString(locale === "id" ? "id-ID" : "en-US")}</span></div>
                 )}
               </div>
               <div>
-                <SubHead title="Sebaran teknologi" />
+                <SubHead title={t("Technology distribution", "Sebaran teknologi")} />
                 {RADIOS.map((r, i) => (
-                  <FilterRow key={r} fixed on color={RADIO_COLORS[i]} label={r} value={calc.perRadio[i]} max={maxRadio} />
+                  <FilterRow key={r} fixed on color={RADIO_COLORS[i]} label={r} value={calc.perRadio[i]} max={maxRadio} locale={locale} />
                 ))}
               </div>
             </div>
@@ -1110,9 +1166,9 @@ export default function Dashboard() {
         </div>
       </aside>
 
-      {/* Legenda ringkas — mobile: bottom-sheet di atas nav; desktop: floating draggable */}
+      {/* Compact legend — mobile: popover; desktop: draggable overlay */}
 
-      {/* === Mobile legend (< md): popover kecil di kanan-bawah area peta; skala ada di kiri-bawah === */}
+      {/* Mobile legend (< md): bottom-right popover; scale is at bottom-left. */}
       <div
         ref={mobileLegendRef}
         style={{ transform: `translate(${mobileLegendPos.x}px, ${mobileLegendPos.y}px)` }}
@@ -1121,20 +1177,20 @@ export default function Dashboard() {
         {legendOpen && (
           <div className={`w-52 max-w-[calc(100vw-1rem)] space-y-2 rounded-xl p-2.5 text-[11px] text-slate-700 ${glass}`}>
             <div>
-              <div className="mb-1 text-slate-500">Sel BTS per operator</div>
+              <div className="mb-1 text-slate-500">{t("Cell sites by operator", "Sel BTS per operator")}</div>
               <div className="grid grid-cols-2 gap-x-2 gap-y-1">
                 {Object.values(OPERATORS).slice(0, 5).map((o) => (
                   <span key={o.name} className="flex items-center gap-1.5"><Dot c={o.color} />{o.name}</span>
                 ))}
-                <span className="flex items-center gap-1.5"><Dot c={OTHER_COLOR} />Lainnya</span>
+                <span className="flex items-center gap-1.5"><Dot c={OTHER_COLOR} />{t("Other", "Lainnya")}</span>
               </div>
             </div>
             <div className="space-y-1">
-              <span className="flex items-center gap-1.5"><Dot c="#fbbf24" />Menara OSM</span>
-              <span className="flex items-center gap-1.5"><Dot c="#0891b2" ring />Landing station</span>
-              <Legend c="#38bdf8">Kabel laut</Legend>
-              <Legend c="#10b981">Fiber operasional</Legend>
-              <Legend c="#ca8a04">Fiber rencana</Legend>
+              <span className="flex items-center gap-1.5"><Dot c="#fbbf24" />{t("OSM towers", "Menara OSM")}</span>
+              <span className="flex items-center gap-1.5"><Dot c="#0891b2" ring />{t("Landing stations", "Stasiun pendaratan")}</span>
+              <Legend c="#38bdf8">{t("Submarine cables", "Kabel laut")}</Legend>
+              <Legend c="#10b981">{t("Operational fiber", "Fiber operasional")}</Legend>
+              <Legend c="#ca8a04">{t("Planned fiber", "Fiber rencana")}</Legend>
               <Legend c="#9333ea">Microwave</Legend>
             </div>
           </div>
@@ -1150,12 +1206,12 @@ export default function Dashboard() {
           }}
           onDoubleClick={() => resetLegend(true)}
           onKeyDown={(e) => { if (e.key === "Home") resetLegend(true); }}
-          title="Seret untuk memindahkan · klik untuk membuka/tutup · klik dua kali untuk mengembalikan"
-          aria-label="Legenda. Seret untuk memindahkan, klik untuk membuka atau menutup, klik dua kali untuk mengembalikan posisi"
+          title={t("Drag to move · click to open or close · double-click to reset", "Seret untuk memindahkan · klik untuk membuka atau menutup · klik dua kali untuk mengatur ulang")}
+          aria-label={t("Legend. Drag to move, click to open or close, double-click to reset position", "Legenda. Seret untuk memindahkan, klik untuk membuka atau menutup, klik dua kali untuk mengatur ulang posisi")}
           aria-expanded={legendOpen}
           className={`flex cursor-grab touch-none select-none items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-800 active:cursor-grabbing ${glass} ${focusRing}`}
         >
-          Legenda
+          {t("Legend", "Legenda")}
           <span className={`transition ${legendOpen ? "" : "rotate-180"}`}><Icon name="chevron" size={10} /></span>
         </button>
       </div>
@@ -1165,20 +1221,20 @@ export default function Dashboard() {
         {legendOpen && (
           <div className={`mb-2 w-52 space-y-2.5 rounded-xl p-3 text-[11px] text-slate-700 ${glass}`}>
             <div>
-              <div className="mb-1 text-slate-500">Sel BTS per operator</div>
+              <div className="mb-1 text-slate-500">{t("Cell sites by operator", "Sel BTS per operator")}</div>
               <div className="grid grid-cols-2 gap-x-2 gap-y-1">
                 {Object.values(OPERATORS).slice(0, 5).map((o) => (
                   <span key={o.name} className="flex items-center gap-1.5"><Dot c={o.color} />{o.name}</span>
                 ))}
-                <span className="flex items-center gap-1.5"><Dot c={OTHER_COLOR} />Lainnya</span>
+                <span className="flex items-center gap-1.5"><Dot c={OTHER_COLOR} />{t("Other", "Lainnya")}</span>
               </div>
             </div>
             <div className="space-y-1">
-              <span className="flex items-center gap-1.5"><Dot c="#fbbf24" />Menara OSM</span>
-              <span className="flex items-center gap-1.5"><Dot c="#0891b2" ring />Landing station</span>
-              <Legend c="#38bdf8">Kabel laut</Legend>
-              <Legend c="#10b981">Fiber operasional</Legend>
-              <Legend c="#ca8a04">Fiber rencana</Legend>
+              <span className="flex items-center gap-1.5"><Dot c="#fbbf24" />{t("OSM towers", "Menara OSM")}</span>
+              <span className="flex items-center gap-1.5"><Dot c="#0891b2" ring />{t("Landing stations", "Stasiun pendaratan")}</span>
+              <Legend c="#38bdf8">{t("Submarine cables", "Kabel laut")}</Legend>
+              <Legend c="#10b981">{t("Operational fiber", "Fiber operasional")}</Legend>
+              <Legend c="#ca8a04">{t("Planned fiber", "Fiber rencana")}</Legend>
               <Legend c="#9333ea">Microwave</Legend>
             </div>
           </div>
@@ -1194,12 +1250,12 @@ export default function Dashboard() {
           }}
           onDoubleClick={() => resetLegend()}
           onKeyDown={(e) => { if (e.key === "Home") resetLegend(); }}
-          title="Seret untuk memindahkan · klik untuk membuka/tutup · klik dua kali untuk mengembalikan"
-          aria-label="Legenda. Seret untuk memindahkan, klik untuk membuka atau menutup, klik dua kali untuk mengembalikan posisi"
+          title={t("Drag to move · click to open or close · double-click to reset", "Seret untuk memindahkan · klik untuk membuka atau menutup · klik dua kali untuk mengatur ulang")}
+          aria-label={t("Legend. Drag to move, click to open or close, double-click to reset position", "Legenda. Seret untuk memindahkan, klik untuk membuka atau menutup, klik dua kali untuk mengatur ulang posisi")}
           aria-expanded={legendOpen}
           className={`flex cursor-grab touch-none select-none items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-800 hover:bg-slate-100 active:cursor-grabbing ${glass} ${focusRing}`}
         >
-          Legenda
+          {t("Legend", "Legenda")}
           <span className={`transition ${legendOpen ? "" : "rotate-180"}`}><Icon name="chevron" size={10} /></span>
         </button>
       </div>
@@ -1210,11 +1266,11 @@ export default function Dashboard() {
           <span className="truncate">{place.name}</span>
         </div>
         <div className="truncate text-[11px] text-slate-600">{place.sub}</div>
-        <div className="text-[11px] tabular-nums text-slate-700">{fmt(vp.cells)} sel, {fmt(vp.towers)} menara dalam tampilan</div>
+        <div className="text-[11px] tabular-nums text-slate-700">{t(`${fmt(vp.cells, locale)} cell sites, ${fmt(vp.towers, locale)} towers in view`, `${fmt(vp.cells, locale)} sel BTS, ${fmt(vp.towers, locale)} menara dalam tampilan`)}</div>
       </div>
       </div>
 
-      {/* Bar bawah: mobile = info lokasi + menu; desktop = rail ikon melayang di kiri */}
+      {/* Bottom bar: location info and menu on mobile; floating icon rail on desktop */}
       <div className="relative z-20 shrink-0 border-t border-slate-900/10 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-2px_8px_rgba(15,23,42,.06)] md:contents">
         <div className="flex items-center justify-between gap-2 px-3 pt-1.5 text-[11px] text-slate-600 md:hidden">
           <span className="flex min-w-0 items-center gap-1.5">
@@ -1222,18 +1278,18 @@ export default function Dashboard() {
             <span className="truncate font-medium text-slate-900">{place.name}</span>
             <span className="truncate">· {place.sub}</span>
           </span>
-          <span className="shrink-0 tabular-nums">{fmt(vp.cells)} sel</span>
+          <span className="shrink-0 tabular-nums">{t(`${fmt(vp.cells, locale)} cell sites`, `${fmt(vp.cells, locale)} sel BTS`)}</span>
         </div>
       <nav
-        aria-label="Menu utama"
+        aria-label={t("Main menu", "Menu utama")}
         className={`flex items-center gap-1 px-2 py-1 md:absolute md:left-3 md:top-3 md:z-20 md:flex-col md:justify-start md:rounded-2xl md:p-1 md:border md:border-slate-900/10 md:bg-white/90 md:shadow-xl md:backdrop-blur`}
       >
-        <RailBtn icon="layers" label="Layer & peta dasar" active={tab === "layers"} onClick={() => openTab("layers")} />
-        <RailBtn icon="filter" label="Filter data" active={tab === "filter"} badge={dirty} onClick={() => openTab("filter")} />
-        <RailBtn icon="pin" label="Wilayah" active={tab === "area"} badge={!!region} onClick={() => openTab("area")} />
-        <RailBtn icon="compare" label="Bandingkan operator" active={tab === "compare"} onClick={() => openTab("compare")} />
-        <RailBtn icon="chart" label="Ringkasan" active={tab === "stats"} onClick={() => openTab("stats")} />
-        <RailBtn icon="download" label="Ekspor data" active={tab === "export"} onClick={() => openTab("export")} />
+        <RailBtn icon="layers" label={t("Layers & basemap", "Layer & peta dasar")} active={tab === "layers"} onClick={() => openTab("layers")} />
+        <RailBtn icon="filter" label={t("Data filters", "Filter data")} active={tab === "filter"} badge={dirty} onClick={() => openTab("filter")} />
+        <RailBtn icon="pin" label={t("Area", "Wilayah")} active={tab === "area"} badge={!!region} onClick={() => openTab("area")} />
+        <RailBtn icon="compare" label={t("Compare operators", "Bandingkan operator")} active={tab === "compare"} onClick={() => openTab("compare")} />
+        <RailBtn icon="chart" label={t("Summary", "Ringkasan")} active={tab === "stats"} onClick={() => openTab("stats")} />
+        <RailBtn icon="download" label={t("Export data", "Ekspor data")} active={tab === "export"} onClick={() => openTab("export")} />
       </nav>
       </div>
     </main>

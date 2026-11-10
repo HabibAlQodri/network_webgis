@@ -17,14 +17,14 @@ export const OTHER_COLOR = "#64748b";
 export const RADIOS = ["GSM", "UMTS", "LTE", "NR"] as const;
 export const RADIO_COLORS = ["#f59e0b", "#10b981", "#38bdf8", "#f472b6"];
 
-export const REGIONS = ["Nasional", "Sumatra", "Jawa", "Kalimantan", "Sulawesi", "Bali & Nusa Tenggara", "Maluku & Papua"] as const;
+export const REGIONS = ["National", "Sumatra", "Java", "Kalimantan", "Sulawesi", "Bali & Nusa Tenggara", "Maluku & Papua"] as const;
 export type Region = (typeof REGIONS)[number];
 export type Preset = { label: string; province: string; region: Region; center: [number, number]; zoom: number };
 
 const P = (label: string, province: string, region: Region, lon: number, lat: number, zoom: number): Preset => ({ label, province, region, center: [lon, lat], zoom });
 
 export const PRESETS: Preset[] = [
-  P("Indonesia", "Seluruh nusantara", "Nasional", 118, -2.5, 4.2),
+  P("Indonesia", "Entire archipelago", "National", 118, -2.5, 4.2),
   // Sumatra
   P("Banda Aceh", "Aceh", "Sumatra", 95.32, 5.55, 11),
   P("Medan", "Sumatra Utara", "Sumatra", 98.67, 3.59, 10.8),
@@ -35,12 +35,12 @@ export const PRESETS: Preset[] = [
   P("Palembang", "Sumatra Selatan", "Sumatra", 104.75, -2.98, 11),
   P("Bandar Lampung", "Lampung", "Sumatra", 105.26, -5.43, 11),
   // Jawa
-  P("Jabodetabek", "DKI Jakarta, Banten, Jawa Barat", "Jawa", 106.85, -6.25, 9.6),
-  P("Bandung", "Jawa Barat", "Jawa", 107.61, -6.91, 10.8),
-  P("Semarang", "Jawa Tengah", "Jawa", 110.42, -6.99, 11),
-  P("Yogyakarta", "DI Yogyakarta", "Jawa", 110.37, -7.8, 11),
-  P("Surabaya", "Jawa Timur", "Jawa", 112.75, -7.27, 10.8),
-  P("Malang", "Jawa Timur", "Jawa", 112.63, -7.98, 11),
+  P("Jabodetabek", "Jakarta, Banten, West Java", "Java", 106.85, -6.25, 9.6),
+  P("Bandung", "West Java", "Java", 107.61, -6.91, 10.8),
+  P("Semarang", "Central Java", "Java", 110.42, -6.99, 11),
+  P("Yogyakarta", "Yogyakarta", "Java", 110.37, -7.8, 11),
+  P("Surabaya", "East Java", "Java", 112.75, -7.27, 10.8),
+  P("Malang", "East Java", "Java", 112.63, -7.98, 11),
   // Kalimantan
   P("Pontianak", "Kalimantan Barat", "Kalimantan", 109.33, -0.03, 11),
   P("Banjarmasin", "Kalimantan Selatan", "Kalimantan", 114.59, -3.32, 11),

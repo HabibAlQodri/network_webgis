@@ -6,6 +6,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { Feature, FeatureCollection, Point } from "geojson";
 import { CARTO_API_KEY, OPERATORS, OTHER_COLOR, RADIOS } from "@/lib/config";
 import { cellFilterExpr, type CellFilter } from "@/lib/cellFilter";
+import { text, type Locale } from "@/lib/locale";
 import { cellsToGeoJSON, type CellData } from "@/lib/data";
 import type { RegionFilter } from "@/lib/region";
 import { PointGrid, type BBox } from "@/lib/spatial";
@@ -27,7 +28,9 @@ type Props = {
   mode: "points" | "heat";
   view: { center: [number, number]; zoom: number; n: number; bounds?: BBox };
   basemap?: Basemap;
+  locale: Locale;
   onViewport: (v: Viewport) => void;
+  onMapReady?: (map: MLMap | null) => void;
 };
 
 const BASEMAPS: Record<Basemap, string> = { dark: "dark_all", light: "light_all", voyager: "rastertiles/voyager" };
@@ -96,10 +99,11 @@ function popupNode(title: string, rows: [string, string][], badge?: { text: stri
   return el;
 }
 
-export default function MapView({ cells, mask, sourceIdx, filter, region, marker, towers, show, mode, view, basemap = "dark", onViewport }: Props) {
+export default function MapView({ cells, mask, sourceIdx, filter, region, marker, towers, show, mode, view, basemap = "dark", locale, onViewport, onMapReady }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const coordRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MLMap | null>(null);
+  const localeRef = useRef(locale);
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(true);
@@ -118,6 +122,27 @@ export default function MapView({ cells, mask, sourceIdx, filter, region, marker
   useEffect(() => {
     latest.current = { cells, mask, srcIdx, filter, region, grids, towers, onViewport };
   });
+  useEffect(() => { localeRef.current = locale; }, [locale]);
+  useEffect(() => {
+    if (!ready) return;
+    const container = mapRef.current?.getContainer();
+    if (!container) return;
+    const labels = [
+      [".maplibregl-ctrl-zoom-in", text(locale, "Zoom in", "Perbesar")],
+      [".maplibregl-ctrl-zoom-out", text(locale, "Zoom out", "Perkecil")],
+      [".maplibregl-ctrl-geolocate", text(locale, "Find my location", "Temukan lokasi saya")],
+    ] as const;
+    for (const [selector, label] of labels) {
+      const button = container.querySelector<HTMLButtonElement>(selector);
+      if (button) { button.title = label; button.setAttribute("aria-label", label); }
+    }
+    const fullscreen = container.querySelector<HTMLButtonElement>(".maplibregl-ctrl-fullscreen");
+    if (fullscreen) {
+      const label = text(locale, "Toggle fullscreen", "Alihkan layar penuh");
+      fullscreen.title = label;
+      fullscreen.setAttribute("aria-label", label);
+    }
+  }, [locale, ready]);
 
   const report = () => {
     const map = mapRef.current; if (!map) return;
@@ -144,11 +169,12 @@ export default function MapView({ cells, mask, sourceIdx, filter, region, marker
       container: box.current!,
       center: view.center, zoom: view.zoom,
       minZoom: 3, maxZoom: 18,
+      canvasContextAttributes: { preserveDrawingBuffer: true },
       style: { version: 8, sources: baseSources, layers: baseLayers },
     });
     mapRef.current = map;
     map.on("error", (e) => console.error("MapLibre error:", e.error));
-    map.once("idle", () => setBusy(false));
+    map.once("idle", () => { setBusy(false); onMapReady?.(map); });
     const ro = new ResizeObserver(() => map.resize());
     ro.observe(box.current!);
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
@@ -286,46 +312,51 @@ export default function MapView({ cells, mask, sourceIdx, filter, region, marker
             const radio = Number(p.radio ?? 0);
             const updated = Number(p.updated ?? 0);
             const op = OPERATORS[mnc]?.name ?? `MNC ${mnc}`;
-            open(e.lngLat, popupNode(`${op} · ${RADIOS[radio] ?? "Sel"}`, [
-              ["TAC", String(p.area ?? "-")], ["Cell ID", String(p.cell ?? "-")], ["Range", `${p.range ?? 0} m`],
-              ["Samples", String(p.samples ?? "-")], ["Update", updated ? new Date(updated * 1000).toLocaleDateString("id-ID") : "-"],
+            const language = localeRef.current;
+            open(e.lngLat, popupNode(`${op} · ${RADIOS[radio] ?? text(language, "Cell", "Sel")}`, [
+              ["TAC", String(p.area ?? "-")], ["Cell ID", String(p.cell ?? "-")], [text(language, "Range", "Jangkauan"), `${p.range ?? 0} m`],
+              [text(language, "Samples", "Sampel"), String(p.samples ?? "-")], [text(language, "Updated", "Diperbarui"), updated ? new Date(updated * 1000).toLocaleDateString(language === "id" ? "id-ID" : "en-US") : "-"],
             ], { text: op, color: OPERATORS[mnc]?.color ?? OTHER_COLOR }));
             break;
           }
           case "towers": {
-            const name = typeof p.name === "string" && p.name ? p.name : "Menara (OSM)";
+            const language = localeRef.current;
+            const name = typeof p.name === "string" && p.name ? p.name : text(language, "Tower (OSM)", "Menara (OSM)");
             open(e.lngLat, popupNode(name, [
-              ["Operator", String(p.operator || "-")], ["Tipe", String(p.kind || "-")],
-              ["Tinggi", p.height ? `${p.height} m` : "-"], ["OSM", String(p.id ?? "-")],
+              [text(language, "Operator", "Operator"), String(p.operator || "-")], [text(language, "Type", "Jenis"), String(p.kind || "-")],
+              [text(language, "Height", "Tinggi"), p.height ? `${p.height} m` : "-"], ["OSM ID", String(p.id ?? "-")],
             ], { text: "", color: "#fbbf24" }));
             break;
           }
           case "cables-tg-hit": {
-            const name = String(p.name || "Kabel Laut");
+            const language = localeRef.current;
+            const name = String(p.name || text(language, "Submarine cable", "Kabel laut"));
             open(e.lngLat, popupNode(name, [
-              ["Status", p.is_planned ? "Rencana" : "Aktif / Operasional"],
+              [text(language, "Status", "Status"), p.is_planned ? text(language, "Planned", "Rencana") : text(language, "Active / Operational", "Aktif / Operasional")],
               ["RFS Year", p.rfs_year ? String(p.rfs_year) : "-"],
-              ["Landing Stn", p.landing_count ? `${p.landing_count} lokasi` : "-"],
-              ["Sumber", "TeleGeography"],
+              [text(language, "Landing stations", "Stasiun pendaratan"), p.landing_count ? String(p.landing_count) : "-"],
+              [text(language, "Source", "Sumber"), "TeleGeography"],
               ["ID", String(p.id ?? "-")],
             ], { text: "", color: typeof p.color === "string" ? p.color : "#38bdf8" }));
             break;
           }
           case "landing-points": {
-            const name = String(p.name || "Landing Station");
+            const language = localeRef.current;
+            const name = String(p.name || text(language, "Landing Station", "Stasiun pendaratan"));
             open(e.lngLat, popupNode(name, [
-              ["Kategori", "Landing Station Kabel Laut"],
-              ["Negara", "Indonesia"],
-              ["Sumber", "TeleGeography"],
+              [text(language, "Category", "Kategori"), text(language, "Submarine cable landing station", "Stasiun pendaratan kabel laut")],
+              [text(language, "Country", "Negara"), "Indonesia"],
+              [text(language, "Source", "Sumber"), "TeleGeography"],
             ], { text: "", color: "#0891b2" }));
             break;
           }
           case "itu-fiber-hit": {
-            const name = String(p.name || "Backbone Jaringan");
+            const language = localeRef.current;
+            const name = String(p.name || text(language, "Network backbone", "Jaringan backbone"));
             open(e.lngLat, popupNode(name, [
-              ["Medium", String(p.medium || "Fiber Optic")],
-              ["Status", String(p.status || "Operational")],
-              ["Sumber", "ITU - Broadband Map"],
+              [text(language, "Medium", "Media"), String(p.medium || text(language, "Fiber Optic", "Serat optik"))],
+              [text(language, "Status", "Status"), String(p.status || text(language, "Operational", "Operasional"))],
+              [text(language, "Source", "Sumber"), "ITU - Broadband Map"],
               ["UID", String(p.uid ?? "-")],
             ], { text: "", color: typeof p.color === "string" ? p.color : "#10b981" }));
             break;
@@ -341,7 +372,7 @@ export default function MapView({ cells, mask, sourceIdx, filter, region, marker
       map.on("moveend", report);
       setReady(true);
     });
-    return () => { mq.removeEventListener("change", placeScale); popupRef.current?.remove(); markerRef.current?.remove(); markerRef.current = null; map.remove(); mapRef.current = null; };
+    return () => { onMapReady?.(null); mq.removeEventListener("change", placeScale); popupRef.current?.remove(); markerRef.current?.remove(); markerRef.current = null; map.remove(); mapRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -414,7 +445,7 @@ export default function MapView({ cells, mask, sourceIdx, filter, region, marker
       {busy && (
         <div className="pointer-events-none absolute left-1/2 top-3 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full bg-white/90 px-3 py-1 text-[11px] text-slate-700 shadow-md">
           <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500" />
-          Memuat peta…
+          {text(locale, "Loading map…", "Memuat peta…")}
         </div>
       )}
       <div
@@ -422,7 +453,7 @@ export default function MapView({ cells, mask, sourceIdx, filter, region, marker
         aria-hidden
         className="pointer-events-none absolute bottom-14 right-[104px] z-10 hidden rounded-md bg-white/90 px-2.5 py-1 font-mono text-[11px] tabular-nums text-slate-600 shadow-md md:block"
       >
-        Arahkan kursor ke peta
+        {text(locale, "Move the cursor over the map", "Arahkan kursor ke peta")}
       </div>
     </>
   );

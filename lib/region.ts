@@ -1,11 +1,12 @@
 import type { Geometry, MultiPolygon, Polygon } from "geojson";
 import type { CellData } from "./data";
 import { inBBox, type BBox } from "./spatial";
+import type { Locale } from "./locale";
 
-/** Wilayah aktif untuk memfilter data. `geometry` opsional: tanpa geometri, hanya bbox yang dipakai. */
+/** Active area used to filter data. `geometry` is optional; without it, only the bounding box is used. */
 export type RegionFilter = {
   label: string;
-  /** Jenis ditampilkan di UI, mis. "Provinsi", "Kabupaten", "Tampilan peta". */
+  /** Type displayed in the UI, e.g. "Province", "Regency", or "Map view". */
   kind: string;
   bbox: BBox;
   geometry?: Polygon | MultiPolygon;
@@ -99,15 +100,23 @@ type NominatimItem = {
   geojson?: Geometry;
 };
 
-const KIND_LABEL: Record<string, string> = {
-  state: "Provinsi", province: "Provinsi", region: "Wilayah",
-  county: "Kabupaten", regency: "Kabupaten", city: "Kota", municipality: "Kota",
-  city_district: "Kecamatan", district: "Kecamatan", suburb: "Kelurahan", village: "Desa",
-  island: "Pulau", town: "Kota", hamlet: "Dusun",
+const KIND_LABEL: Record<Locale, Record<string, string>> = {
+  en: {
+    state: "Province", province: "Province", region: "Region",
+    county: "Regency", regency: "Regency", city: "City", municipality: "City",
+    city_district: "District", district: "District", suburb: "Suburb", village: "Village",
+    island: "Island", town: "Town", hamlet: "Hamlet",
+  },
+  id: {
+    state: "Provinsi", province: "Provinsi", region: "Wilayah",
+    county: "Kabupaten", regency: "Kabupaten", city: "Kota", municipality: "Kota",
+    city_district: "Kecamatan", district: "Kecamatan", suburb: "Kelurahan", village: "Desa",
+    island: "Pulau", town: "Kota", hamlet: "Dusun",
+  },
 };
 
 /** Ubah satu hasil Nominatim menjadi PlaceResult; null bila tak punya koordinat/bbox yang valid. */
-export function parseNominatimItem(it: NominatimItem): PlaceResult | null {
+export function parseNominatimItem(it: NominatimItem, locale: Locale = "en"): PlaceResult | null {
   const lat = Number(it.lat), lon = Number(it.lon);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   const bb = it.boundingbox?.map(Number);
@@ -119,25 +128,25 @@ export function parseNominatimItem(it: NominatimItem): PlaceResult | null {
     id: `${it.osm_type ?? "x"}${it.osm_id ?? it.place_id}`,
     name: it.name || first,
     detail: rest.slice(0, 2).join(", "),
-    kind: KIND_LABEL[it.addresstype ?? ""] ?? KIND_LABEL[it.type ?? ""] ?? (geometry ? "Wilayah" : "Lokasi"),
+    kind: KIND_LABEL[locale][it.addresstype ?? ""] ?? KIND_LABEL[locale][it.type ?? ""] ?? (geometry ? (locale === "id" ? "Wilayah" : "Area") : (locale === "id" ? "Lokasi" : "Location")),
     center: [lon, lat], bbox, geometry,
   };
 }
 
 /**
- * Cari tempat lewat Nominatim. Hanya dipanggil atas aksi eksplisit pengguna (bukan saat mengetik),
+ * Search for places with Nominatim. Only called on explicit user action (not while typing),
  * sesuai kebijakan penggunaan Nominatim (tanpa autocomplete, maks. ±1 permintaan/detik).
  */
-export async function geocode(query: string, signal?: AbortSignal): Promise<PlaceResult[]> {
+export async function geocode(query: string, signal?: AbortSignal, locale: Locale = "en"): Promise<PlaceResult[]> {
   const params = new URLSearchParams({
     format: "jsonv2", q: query, countrycodes: "id", limit: "6",
-    polygon_geojson: "1", polygon_threshold: "0.005", "accept-language": "id",
+    polygon_geojson: "1", polygon_threshold: "0.005", "accept-language": locale,
   });
   const res = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, { signal, headers: { Accept: "application/json" } });
-  if (!res.ok) throw new Error(`Pencarian gagal (kode ${res.status})`);
+  if (!res.ok) throw new Error(`Search failed (status ${res.status})`);
   const items = (await res.json()) as NominatimItem[];
-  if (!Array.isArray(items)) throw new Error("Respons pencarian tidak valid");
-  return items.map(parseNominatimItem).filter((p): p is PlaceResult => p !== null);
+  if (!Array.isArray(items)) throw new Error("Invalid search response");
+  return items.map((item) => parseNominatimItem(item, locale)).filter((p): p is PlaceResult => p !== null);
 }
 
 export function placeToRegion(p: PlaceResult): RegionFilter {

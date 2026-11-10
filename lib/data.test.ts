@@ -63,39 +63,39 @@ describe("loadDataset — kegagalan HTTP/jaringan", () => {
     expect(steps.sort()).toEqual(["cells", "towers"]);
   });
 
-  it("404 → pesan 'tidak ditemukan' + detail HTTP", async () => {
+  it("404 returns a not-found message and HTTP details", async () => {
     mockFetch({ cells: new Response("nope", { status: 404, statusText: "Not Found" }), towers: json(makeTowers()) });
     const e = await rejection(loadDataset());
     expect(e).toBeInstanceOf(DataLoadError);
-    expect((e as DataLoadError).userMessage).toMatch(/tidak ditemukan/);
+    expect((e as DataLoadError).userMessage).toMatch(/was not found/);
     expect((e as DataLoadError).detail).toBe("HTTP 404 Not Found: GET /data/cells.json");
   });
 
-  it("500 → pesan masalah server", async () => {
+  it("500 returns a server error message", async () => {
     mockFetch({ cells: json(makeCells()), towers: new Response("", { status: 500, statusText: "Internal Server Error" }) });
     const e = (await rejection(loadDataset())) as DataLoadError;
-    expect(e.userMessage).toMatch(/Server sedang bermasalah/);
+    expect(e.userMessage).toMatch(/server encountered a problem/);
     expect(e.detail).toContain("HTTP 500");
     expect(e.detail).toContain("/data/towers.geojson");
   });
 
-  it("status 4xx lain → pesan generik dengan kode", async () => {
+  it("other 4xx statuses return a generic message with the status code", async () => {
     mockFetch({ cells: new Response("", { status: 403, statusText: "Forbidden" }), towers: json(makeTowers()) });
     const e = (await rejection(loadDataset())) as DataLoadError;
-    expect(e.userMessage).toMatch(/gagal dimuat \(kode 403\)/);
+    expect(e.userMessage).toMatch(/failed to load \(status 403\)/);
   });
 
-  it("kegagalan jaringan → pesan koneksi, detail menyimpan error asli", async () => {
+  it("network failures return a connection message and preserve the original error in details", async () => {
     mockFetch({ cells: new TypeError("Failed to fetch"), towers: json(makeTowers()) });
     const e = (await rejection(loadDataset())) as DataLoadError;
-    expect(e.userMessage).toMatch(/Periksa koneksi internet/);
+    expect(e.userMessage).toMatch(/Check your internet connection/);
     expect(e.detail).toContain("Failed to fetch");
   });
 
-  it("JSON rusak → pesan format tidak valid", async () => {
+  it("invalid JSON returns a format error message", async () => {
     mockFetch({ cells: new Response("{ bukan json", { status: 200 }), towers: json(makeTowers()) });
     const e = (await rejection(loadDataset())) as DataLoadError;
-    expect(e.userMessage).toMatch(/rusak atau formatnya tidak valid/);
+    expect(e.userMessage).toMatch(/corrupted or has an invalid format/);
     expect(e.detail).toMatch(/^Invalid JSON: GET \/data\/cells\.json/);
   });
 
@@ -104,7 +104,7 @@ describe("loadDataset — kegagalan HTTP/jaringan", () => {
     mockFetch({ cells: json(c), towers: json(makeTowers()) });
     const e = (await rejection(loadDataset())) as DataLoadError;
     expect(e).toBeInstanceOf(DataLoadError);
-    expect(e.detail).toMatch(/panjang `lat`/);
+    expect(e.detail).toMatch(/length of `lat`/);
   });
 });
 
@@ -160,48 +160,48 @@ describe("validateCells", () => {
     expect(() => validateCells(v)).toThrow(DataLoadError);
   });
 
-  it("menolak field yang hilang", () => {
+  it("rejects missing fields", () => {
     const c: Partial<CellData> = makeCells(); delete c.lon;
-    expect(() => validateCells(c)).toThrow(/`lon` hilang atau bukan array/);
+    expect(() => validateCells(c)).toThrow(/`lon` is missing or is not an array/);
   });
 
   it("menolak field yang bukan array", () => {
-    expect(() => validateCells({ ...makeCells(), mnc: "10,11,1" })).toThrow(/`mnc` hilang atau bukan array/);
+    expect(() => validateCells({ ...makeCells(), mnc: "10,11,1" })).toThrow(/`mnc` is missing or is not an array/);
   });
 
   it("menolak panjang array yang tidak konsisten", () => {
     const c = makeCells(); c.range.push(1000);
-    expect(() => validateCells(c)).toThrow(/panjang `range` \(4\) berbeda dari `radio` \(3\)/);
+    expect(() => validateCells(c)).toThrow(/length of `range` \(4\) differs from `radio` \(3\)/);
   });
 
   it("menolak array kosong", () => {
     const empty = Object.fromEntries(Object.keys(makeCells()).map((k) => [k, []]));
-    expect(() => validateCells(empty)).toThrow(/array kosong/);
+    expect(() => validateCells(empty)).toThrow(/empty array/);
   });
 
   it("menolak elemen null / bukan angka", () => {
     const c = makeCells(); (c.samples as unknown[])[1] = null;
-    expect(() => validateCells(c)).toThrow(/`samples\[1\]` bukan angka valid/);
+    expect(() => validateCells(c)).toThrow(/`samples\[1\]` is not a valid number/);
     const d = makeCells(); (d.lon as unknown[])[0] = "106.8";
     expect(() => validateCells(d)).toThrow(/`lon\[0\]`/);
   });
 
   it("menolak radio di luar rentang atau bukan bilangan bulat", () => {
     const a = makeCells(); a.radio[2] = 4;
-    expect(() => validateCells(a)).toThrow(/`radio\[2\]` = 4 di luar rentang 0–3/);
+    expect(() => validateCells(a)).toThrow(/`radio\[2\]` = 4 is outside the range 0–3/);
     const b = makeCells(); b.radio[0] = 1.5;
     expect(() => validateCells(b)).toThrow(/`radio\[0\]`/);
   });
 
   it("menolak koordinat di luar rentang (mis. lon/lat tertukar)", () => {
     const c = makeCells(); c.lat[1] = 107.6; c.lon[1] = -6.9;
-    expect(() => validateCells(c)).toThrow(/koordinat sel ke-1 di luar rentang/);
+    expect(() => validateCells(c)).toThrow(/coordinates for cell site 1 are out of range/);
   });
 
   it("pesan pengguna ramah, detail teknis terpisah", () => {
     const c = makeCells(); c.lat.pop();
     try { validateCells(c); } catch (e) {
-      expect((e as DataLoadError).userMessage).toBe("Berkas data sel BTS rusak atau formatnya tidak valid.");
+      expect((e as DataLoadError).userMessage).toBe("Cell site data is corrupted or has an invalid format.");
       expect((e as DataLoadError).detail).toMatch(/^cells\.json: /);
     }
   });
@@ -224,8 +224,8 @@ describe("validateTowers", () => {
   });
 
   it("menolak type yang bukan FeatureCollection", () => {
-    expect(() => validateTowers({ type: "Feature", features: [] })).toThrow(/harus "FeatureCollection"/);
-    expect(() => validateTowers({ features: [] })).toThrow(/harus "FeatureCollection"/);
+    expect(() => validateTowers({ type: "Feature", features: [] })).toThrow(/must be "FeatureCollection"/);
+    expect(() => validateTowers({ features: [] })).toThrow(/must be "FeatureCollection"/);
   });
 
   it("menolak features yang hilang / bukan array", () => {
@@ -234,18 +234,18 @@ describe("validateTowers", () => {
   });
 
   it("menolak item yang bukan Feature", () => {
-    expect(() => validateTowers(withFeature(null))).toThrow(/features\[0\] bukan Feature/);
-    expect(() => validateTowers(withFeature({ type: "Point", coordinates: [1, 2] }))).toThrow(/bukan Feature/);
+    expect(() => validateTowers(withFeature(null))).toThrow(/features\[0\] is not a Feature/);
+    expect(() => validateTowers(withFeature({ type: "Point", coordinates: [1, 2] }))).toThrow(/is not a Feature/);
   });
 
   it("menolak fitur tanpa geometri", () => {
-    expect(() => validateTowers(withFeature({ type: "Feature", properties: {} }))).toThrow(/tidak punya geometri/);
-    expect(() => validateTowers(withFeature({ type: "Feature", geometry: null, properties: {} }))).toThrow(/tidak punya geometri/);
+    expect(() => validateTowers(withFeature({ type: "Feature", properties: {} }))).toThrow(/has no geometry/);
+    expect(() => validateTowers(withFeature({ type: "Feature", geometry: null, properties: {} }))).toThrow(/has no geometry/);
   });
 
   it("menolak geometri selain Point", () => {
     const line = { type: "Feature", geometry: { type: "LineString", coordinates: [[1, 2], [3, 4]] }, properties: {} };
-    expect(() => validateTowers(withFeature(line))).toThrow(/diharapkan "Point"/);
+    expect(() => validateTowers(withFeature(line))).toThrow(/expected "Point"/);
   });
 
   it.each([
@@ -254,13 +254,13 @@ describe("validateTowers", () => {
     ["terlalu pendek", [104]],
     ["berisi string", ["104", "1"]],
     ["berisi null", [null, 1]],
-  ])("menolak koordinat tidak valid: %s", (_n, coords) => {
-    expect(() => validateTowers(withFeature(point(coords)))).toThrow(/koordinat tidak valid/);
+  ])("rejects invalid coordinates: %s", (_n, coords) => {
+    expect(() => validateTowers(withFeature(point(coords)))).toThrow(/has invalid coordinates/);
   });
 
   it("menolak koordinat di luar rentang", () => {
-    expect(() => validateTowers(withFeature(point([200, 1])))).toThrow(/di luar rentang/);
-    expect(() => validateTowers(withFeature(point([100, 95])))).toThrow(/di luar rentang/);
+    expect(() => validateTowers(withFeature(point([200, 1])))).toThrow(/coordinates are out of range/);
+    expect(() => validateTowers(withFeature(point([100, 95])))).toThrow(/coordinates are out of range/);
   });
 
   it("menyebut indeks fitur yang bermasalah", () => {
@@ -271,7 +271,7 @@ describe("validateTowers", () => {
   it("GeoJSON yang gagal validasi ditolak lewat loadDataset", async () => {
     mockFetch({ cells: json(makeCells()), towers: json(withFeature(point([]))) });
     const e = (await rejection(loadDataset())) as DataLoadError;
-    expect(e.userMessage).toBe("Berkas data menara rusak atau formatnya tidak valid.");
+    expect(e.userMessage).toBe("Tower data is corrupted or has an invalid format.");
     expect(e.detail).toMatch(/^towers\.geojson: features\[0\]/);
   });
 });

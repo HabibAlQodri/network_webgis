@@ -11,7 +11,7 @@ const iso = (unix: number) => new Date(unix * 1000).toISOString().slice(0, 10);
 
 export const CSV_COLUMNS = ["radio", "mcc", "mnc", "operator", "tac", "cell_id", "lon", "lat", "range_m", "samples", "updated"] as const;
 
-/** Escape sel CSV (RFC 4180) dan netralkan awalan rumus spreadsheet (=, +, -, @) pada teks. */
+/** Escape CSV cells according to RFC 4180 and neutralize spreadsheet formula prefixes. */
 export function csvCell(v: string | number): string {
   if (typeof v === "number") return String(v);
   const t = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
@@ -47,17 +47,38 @@ export function cellsToExportGeoJSON(c: CellData, idx: ArrayLike<number>, names:
   return { type: "FeatureCollection", features };
 }
 
-/** Nama berkas aman: huruf kecil, tanda hubung, tanpa karakter khusus. */
-export function exportFilename(parts: string[], ext: "csv" | "geojson", date = new Date()): string {
+/** Create a filesystem-safe, lowercase filename. */
+export function exportFilename(parts: string[], ext: "csv" | "geojson" | "png", date = new Date()): string {
   const slug = parts.filter(Boolean).join("_").normalize("NFKD").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-").toLowerCase();
-  return `${slug || "sel-bts"}_${date.toISOString().slice(0, 10)}.${ext}`;
+  return `${slug || "cell-sites"}_${date.toISOString().slice(0, 10)}.${ext}`;
 }
 
-/** Picu unduhan di browser. */
-export function download(filename: string, mime: string, text: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: `${mime};charset=utf-8` }));
+/** Trigger a browser download. */
+export function download(filename: string, mime: string, content: string | Blob): void {
+  const blob = typeof content === "string"
+    ? new Blob([content], { type: `${mime};charset=utf-8` })
+    : content;
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Export a canvas as a PNG file. Reject when the browser cannot serialize the canvas. */
+export function downloadCanvasAsPNG(filename: string, canvas: Pick<HTMLCanvasElement, "toBlob">): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error("The browser could not create a PNG image from the map canvas."));
+          return;
+        }
+        download(filename, "image/png", blob);
+        resolve();
+      }, "image/png");
+    } catch (error) {
+      reject(error);
+    }
+  });
 }
